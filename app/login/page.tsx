@@ -39,11 +39,11 @@ export default function LoginPage() {
     setLoading(false);
 
     if (error) {
-      setMessage(error.message);
+      setMessage(`登入失敗：${error.message}`);
       return;
     }
 
-    router.push("/daily-entry");
+    router.replace("/daily-entry");
   };
 
   return (
