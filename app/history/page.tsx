@@ -1,0 +1,554 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { supabase } from "../../lib/supabase";
+import PageActionButtons from "../components/PageActionButtons";
+
+type RegionCategory = {
+  id: number;
+  region_name_zh: string;
+  sort_order: number;
+  is_non_mainland: boolean;
+};
+
+type DailyEntry = {
+  id: number;
+  entry_date: string;
+  region_id: number;
+  quantity: number;
+};
+
+type MonthlySummary = {
+  total_valid_qty: number;
+  non_mainland_qty: number;
+  raw_score: number;
+  adjusted_score: number;
+  final_bonus_mop: number;
+  meets_qty_400: boolean;
+  meets_non_mainland_100: boolean;
+  meets_score_420: boolean;
+  meets_structure: boolean;
+  final_status: string;
+};
+
+type MonthlyRegionRule = {
+  region_id: number;
+  rule_month: string;
+  quota: number | null;
+  basic_score: number | null;
+  extended_score: number | null;
+  balance_score: number | null;
+};
+
+type WeeklyMarketStatus = {
+  id: number;
+  week_start_date: string;
+  region_id: number;
+  status_color: "red" | "yellow" | "green" | "grey";
+  multiplier: number;
+};
+
+function getMonthStartString(year: number, month: number) {
+  return `${year}-${String(month).padStart(2, "0")}-01`;
+}
+
+function getNextMonthStart(monthStart: string) {
+  const date = new Date(`${monthStart}T00:00:00`);
+  date.setMonth(date.getMonth() + 1);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  return `${year}-${month}-01`;
+}
+
+function getCurrentYear() {
+  return new Date().getFullYear();
+}
+
+function getYearOptions(startYear = 2024, endYear = getCurrentYear()) {
+  const years: number[] = [];
+  for (let y = endYear; y >= startYear; y--) {
+    years.push(y);
+  }
+  return years;
+}
+
+function monthLabel(month: number) {
+  return `${month}月`;
+}
+
+function statusLabel(status: WeeklyMarketStatus["status_color"]) {
+  switch (status) {
+    case "red":
+      return "紅色";
+    case "yellow":
+      return "黃色";
+    case "green":
+      return "綠色";
+    case "grey":
+      return "灰色";
+    default:
+      return "-";
+  }
+}
+
+export default function HistoryPage() {
+  const router = useRouter();
+
+  const currentYear = getCurrentYear();
+  const currentMonth = new Date().getMonth() + 1;
+
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState("");
+  const [displayName, setDisplayName] = useState("");
+
+  const [regions, setRegions] = useState<RegionCategory[]>([]);
+  const [selectedYear, setSelectedYear] = useState<number>(currentYear);
+  const [selectedMonth, setSelectedMonth] = useState<number>(currentMonth);
+
+  const [monthlySummary, setMonthlySummary] = useState<MonthlySummary | null>(null);
+  const [entries, setEntries] = useState<DailyEntry[]>([]);
+  const [monthlyRules, setMonthlyRules] = useState<MonthlyRegionRule[]>([]);
+  const [weeklyStatuses, setWeeklyStatuses] = useState<WeeklyMarketStatus[]>([]);
+
+  const years = useMemo(() => getYearOptions(2024, currentYear), [currentYear]);
+  const months = useMemo(() => Array.from({ length: 12 }, (_, i) => i + 1), []);
+
+  const monthStart = useMemo(
+    () => getMonthStartString(selectedYear, selectedMonth),
+    [selectedYear, selectedMonth]
+  );
+  const nextMonthStart = useMemo(() => getNextMonthStart(monthStart), [monthStart]);
+
+  const totalsByRegion = useMemo(() => {
+    return regions.map((region) => {
+      const total = entries
+        .filter((entry) => entry.region_id === region.id)
+        .reduce((sum, entry) => sum + Number(entry.quantity ?? 0), 0);
+
+      return {
+        ...region,
+        total,
+      };
+    });
+  }, [regions, entries]);
+
+  const visibleEntries = useMemo(() => {
+    return entries.filter((entry) => Number(entry.quantity ?? 0) > 0);
+  }, [entries]);
+
+  const ruleMap = useMemo(() => {
+    const map = new Map<number, MonthlyRegionRule>();
+    monthlyRules.forEach((rule) => map.set(rule.region_id, rule));
+    return map;
+  }, [monthlyRules]);
+
+  const groupedWeeklyStatuses = useMemo(() => {
+    return [...weeklyStatuses].sort((a, b) => {
+      if (a.week_start_date !== b.week_start_date) {
+        return a.week_start_date.localeCompare(b.week_start_date);
+      }
+      return a.region_id - b.region_id;
+    });
+  }, [weeklyStatuses]);
+
+  const loadHistoryData = async (userId: string, userEmail?: string | null) => {
+    setLoading(true);
+    setMessage("");
+
+    const { data: profileData } = await supabase
+      .from("profiles")
+      .select("display_name")
+      .eq("id", userId)
+      .maybeSingle();
+
+    setDisplayName(profileData?.display_name ?? userEmail ?? "User");
+
+    const { data: regionData, error: regionError } = await supabase
+      .from("region_categories")
+      .select("id, region_name_zh, sort_order, is_non_mainland")
+      .order("sort_order", { ascending: true });
+
+    if (regionError) {
+      setMessage(regionError.message);
+      setLoading(false);
+      return;
+    }
+
+    setRegions((regionData ?? []) as RegionCategory[]);
+
+    const { data: summaryData, error: summaryError } = await supabase
+      .from("monthly_summary")
+      .select(
+        "total_valid_qty, non_mainland_qty, raw_score, adjusted_score, final_bonus_mop, meets_qty_400, meets_non_mainland_100, meets_score_420, meets_structure, final_status"
+      )
+      .eq("user_id", userId)
+      .eq("summary_month", monthStart)
+      .maybeSingle();
+
+    if (summaryError) {
+      setMessage(summaryError.message);
+      setLoading(false);
+      return;
+    }
+
+    setMonthlySummary((summaryData as MonthlySummary | null) ?? null);
+
+    const { data: entryData, error: entryError } = await supabase
+      .from("daily_entries")
+      .select("id, entry_date, region_id, quantity")
+      .eq("user_id", userId)
+      .gte("entry_date", monthStart)
+      .lt("entry_date", nextMonthStart)
+      .order("entry_date", { ascending: false })
+      .order("region_id", { ascending: true });
+
+    if (entryError) {
+      setMessage(entryError.message);
+      setLoading(false);
+      return;
+    }
+
+    setEntries((entryData ?? []) as DailyEntry[]);
+
+    const { data: rulesData, error: rulesError } = await supabase
+      .from("monthly_region_rules")
+      .select("region_id, rule_month, quota, basic_score, extended_score, balance_score")
+      .eq("rule_month", monthStart)
+      .order("region_id", { ascending: true });
+
+    if (rulesError) {
+      setMessage(rulesError.message);
+      setLoading(false);
+      return;
+    }
+
+    setMonthlyRules((rulesData ?? []) as MonthlyRegionRule[]);
+
+    const { data: weeklyData, error: weeklyError } = await supabase
+      .from("weekly_market_status")
+      .select("id, week_start_date, region_id, status_color, multiplier")
+      .gte("week_start_date", monthStart)
+      .lt("week_start_date", nextMonthStart)
+      .order("week_start_date", { ascending: true })
+      .order("region_id", { ascending: true });
+
+    if (weeklyError) {
+      setMessage(weeklyError.message);
+      setLoading(false);
+      return;
+    }
+
+    setWeeklyStatuses((weeklyData ?? []) as WeeklyMarketStatus[]);
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    const init = async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        router.replace("/login");
+        return;
+      }
+
+      await loadHistoryData(user.id, user.email);
+    };
+
+    init();
+  }, [router, monthStart, nextMonthStart]);
+
+  if (loading) {
+    return (
+      <main className="min-h-screen bg-slate-50 px-6 py-10">
+        <div className="mx-auto max-w-7xl rounded-2xl bg-white p-8 shadow-sm ring-1 ring-slate-200">
+          載入中...
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <main className="min-h-screen bg-slate-50 px-6 py-10">
+      <div className="mx-auto max-w-7xl space-y-6">
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-slate-900">過往記錄</h1>
+            <p className="mt-1 text-sm text-slate-600">使用者：{displayName}</p>
+            <p className="mt-1 text-sm text-slate-500">可按年份展開月份查看歷史資料</p>
+          </div>
+
+          <PageActionButtons />
+        </div>
+
+        {message ? (
+          <div className="rounded-xl bg-white px-4 py-3 text-sm text-slate-700 shadow-sm ring-1 ring-slate-200">
+            {message}
+          </div>
+        ) : null}
+
+        <div className="grid gap-6 lg:grid-cols-[320px_1fr]">
+          <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+            <h2 className="text-lg font-semibold text-slate-900">年份 / 月份</h2>
+
+            <div className="mt-4 space-y-4">
+              {years.map((year) => (
+                <details
+                  key={year}
+                  open={year === selectedYear}
+                  className="rounded-xl border border-slate-200"
+                >
+                  <summary className="cursor-pointer list-none px-4 py-3 font-semibold text-slate-900">
+                    {year}年
+                  </summary>
+
+                  <div className="grid grid-cols-3 gap-2 border-t border-slate-200 px-4 py-4">
+                    {months.map((month) => {
+                      const active = selectedYear === year && selectedMonth === month;
+
+                      return (
+                        <button
+                          key={`${year}-${month}`}
+                          onClick={() => {
+                            setSelectedYear(year);
+                            setSelectedMonth(month);
+                          }}
+                          className={`rounded-lg px-3 py-2 text-sm transition ${
+                            active
+                              ? "bg-slate-900 text-white"
+                              : "border border-slate-300 text-slate-700 hover:bg-slate-100"
+                          }`}
+                        >
+                          {monthLabel(month)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </details>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-6">
+            <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+              <h2 className="text-xl font-semibold text-slate-900">
+                {selectedYear}年 {selectedMonth}月
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">月份起始：{monthStart}</p>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-4">
+              <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+                <p className="text-sm text-slate-500">本月總份數</p>
+                <p className="mt-2 text-3xl font-bold text-slate-900">
+                  {monthlySummary?.total_valid_qty ?? 0}
+                </p>
+              </div>
+
+              <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+                <p className="text-sm text-slate-500">非內地份數</p>
+                <p className="mt-2 text-3xl font-bold text-slate-900">
+                  {monthlySummary?.non_mainland_qty ?? 0}
+                </p>
+              </div>
+
+              <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+                <p className="text-sm text-slate-500">Raw Score</p>
+                <p className="mt-2 text-3xl font-bold text-slate-900">
+                  {monthlySummary?.raw_score ?? 0}
+                </p>
+              </div>
+
+              <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+                <p className="text-sm text-slate-500">Bonus (MOP)</p>
+                <p className="mt-2 text-3xl font-bold text-slate-900">
+                  {monthlySummary?.final_bonus_mop ?? 0}
+                </p>
+              </div>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-4">
+              <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+                <p className="text-sm text-slate-500">Adjusted Score</p>
+                <p className="mt-2 text-3xl font-bold text-slate-900">
+                  {monthlySummary?.adjusted_score ?? 0}
+                </p>
+              </div>
+
+              <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+                <p className="text-sm text-slate-500">400 份達標</p>
+                <p className="mt-2 text-2xl font-bold text-slate-900">
+                  {monthlySummary?.meets_qty_400 ? "是" : "否"}
+                </p>
+              </div>
+
+              <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+                <p className="text-sm text-slate-500">非內地 100 份達標</p>
+                <p className="mt-2 text-2xl font-bold text-slate-900">
+                  {monthlySummary?.meets_non_mainland_100 ? "是" : "否"}
+                </p>
+              </div>
+
+              <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+                <p className="text-sm text-slate-500">月結算狀態</p>
+                <p className="mt-2 text-2xl font-bold text-slate-900">
+                  {monthlySummary?.final_status ?? "未結算"}
+                </p>
+              </div>
+            </div>
+
+            <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+              <h3 className="text-lg font-semibold text-slate-900">各地區總份數</h3>
+
+              <div className="mt-4 overflow-x-auto">
+                <table className="min-w-full border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-left text-sm text-slate-500">
+                      <th className="px-3 py-3">序號</th>
+                      <th className="px-3 py-3">地區</th>
+                      <th className="px-3 py-3">內地 / 非內地</th>
+                      <th className="px-3 py-3">本月份數</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {totalsByRegion.map((region) => (
+                      <tr key={region.id} className="border-b border-slate-100 text-sm">
+                        <td className="px-3 py-3">{region.sort_order}</td>
+                        <td className="px-3 py-3">{region.region_name_zh}</td>
+                        <td className="px-3 py-3">
+                          {region.is_non_mainland ? "非內地" : "內地"}
+                        </td>
+                        <td className="px-3 py-3 font-medium text-slate-900">
+                          {region.total}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+              <h3 className="text-lg font-semibold text-slate-900">該月規則快照</h3>
+
+              <div className="mt-4 overflow-x-auto">
+                <table className="min-w-full border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-left text-sm text-slate-500">
+                      <th className="px-3 py-3">序號</th>
+                      <th className="px-3 py-3">地區</th>
+                      <th className="px-3 py-3">建議配額</th>
+                      <th className="px-3 py-3">基本分數</th>
+                      <th className="px-3 py-3">延伸分數</th>
+                      <th className="px-3 py-3">平衡分數</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {regions.map((region) => {
+                      const rule = ruleMap.get(region.id);
+
+                      return (
+                        <tr key={region.id} className="border-b border-slate-100 text-sm">
+                          <td className="px-3 py-3">{region.sort_order}</td>
+                          <td className="px-3 py-3">{region.region_name_zh}</td>
+                          <td className="px-3 py-3">{rule?.quota ?? "-"}</td>
+                          <td className="px-3 py-3">{rule?.basic_score ?? "-"}</td>
+                          <td className="px-3 py-3">{rule?.extended_score ?? "-"}</td>
+                          <td className="px-3 py-3">{rule?.balance_score ?? "-"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+              <h3 className="text-lg font-semibold text-slate-900">該月每週調整記錄</h3>
+
+              <div className="mt-4 overflow-x-auto">
+                <table className="min-w-full border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-left text-sm text-slate-500">
+                      <th className="px-3 py-3">週起始日</th>
+                      <th className="px-3 py-3">序號</th>
+                      <th className="px-3 py-3">地區</th>
+                      <th className="px-3 py-3">顏色</th>
+                      <th className="px-3 py-3">調整分數</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {groupedWeeklyStatuses.length === 0 ? (
+                      <tr>
+                        <td className="px-3 py-6 text-sm text-slate-500" colSpan={5}>
+                          該月暫無每週調整記錄。
+                        </td>
+                      </tr>
+                    ) : (
+                      groupedWeeklyStatuses.map((row) => {
+                        const region = regions.find((r) => r.id === row.region_id);
+
+                        return (
+                          <tr key={row.id} className="border-b border-slate-100 text-sm">
+                            <td className="px-3 py-3">{row.week_start_date}</td>
+                            <td className="px-3 py-3">{region?.sort_order ?? row.region_id}</td>
+                            <td className="px-3 py-3">{region?.region_name_zh ?? "-"}</td>
+                            <td className="px-3 py-3">{statusLabel(row.status_color)}</td>
+                            <td className="px-3 py-3">{row.multiplier}</td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+              <h3 className="text-lg font-semibold text-slate-900">該月填報明細</h3>
+
+              <div className="mt-4 overflow-x-auto">
+                <table className="min-w-full border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-left text-sm text-slate-500">
+                      <th className="px-3 py-3">日期</th>
+                      <th className="px-3 py-3">序號</th>
+                      <th className="px-3 py-3">地區</th>
+                      <th className="px-3 py-3">份數</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleEntries.length === 0 ? (
+                      <tr>
+                        <td className="px-3 py-6 text-sm text-slate-500" colSpan={4}>
+                          該月暫時未有填報資料。
+                        </td>
+                      </tr>
+                    ) : (
+                      visibleEntries.map((entry) => {
+                        const region = regions.find((r) => r.id === entry.region_id);
+
+                        return (
+                          <tr key={entry.id} className="border-b border-slate-100 text-sm">
+                            <td className="px-3 py-3">{entry.entry_date}</td>
+                            <td className="px-3 py-3">{region?.sort_order ?? entry.region_id}</td>
+                            <td className="px-3 py-3">{region?.region_name_zh ?? "-"}</td>
+                            <td className="px-3 py-3 font-medium text-slate-900">
+                              {entry.quantity}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  );
+}
