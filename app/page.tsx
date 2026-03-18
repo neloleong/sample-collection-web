@@ -7,7 +7,7 @@ import { supabase } from "../lib/supabase";
 type Profile = {
   display_name: string | null;
   employee_code: string | null;
-  role: string | null;
+  role: "admin" | "staff" | null;
 };
 
 export default function HomePage() {
@@ -16,7 +16,7 @@ export default function HomePage() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [displayName, setDisplayName] = useState("");
   const [employeeCode, setEmployeeCode] = useState("");
-  const [role, setRole] = useState("");
+  const [role, setRole] = useState<"admin" | "staff" | "">("");
 
   const loadUserStatus = async () => {
     setLoading(true);
@@ -37,29 +37,36 @@ export default function HomePage() {
 
     setIsLoggedIn(true);
 
-    const { data: profileData } = await supabase
+    const { data: profileData, error: profileError } = await supabase
       .from("profiles")
       .select("display_name, employee_code, role")
       .eq("id", user.id)
       .maybeSingle();
 
-    const profile = profileData as Profile | null;
+    if (profileError) {
+      console.error("讀取 profile 失敗：", profileError.message);
+    }
 
-    setDisplayName(profile?.display_name ?? user.email ?? "未命名");
+    const profile = (profileData as Profile | null) ?? null;
+
+    const resolvedRole: "admin" | "staff" =
+      profile?.role === "admin" ? "admin" : "staff";
+
+    setDisplayName(profile?.display_name ?? user.email ?? "員工");
     setEmployeeCode(profile?.employee_code ?? "-");
-    setRole(profile?.role ?? "user");
-    setIsAdmin(profile?.role === "admin");
+    setRole(resolvedRole);
+    setIsAdmin(resolvedRole === "admin");
 
     setLoading(false);
   };
 
   useEffect(() => {
-    loadUserStatus();
+    void loadUserStatus();
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(() => {
-      loadUserStatus();
+      void loadUserStatus();
     });
 
     return () => {
@@ -115,7 +122,7 @@ export default function HomePage() {
                 <div className="rounded-xl bg-white p-4 ring-1 ring-slate-200">
                   <p className="text-sm text-slate-500">角色</p>
                   <p className="mt-2 text-lg font-bold text-slate-900">
-                    {role}
+                    {role === "admin" ? "admin" : "staff"}
                   </p>
                 </div>
               </div>
@@ -130,7 +137,7 @@ export default function HomePage() {
             className={`mt-8 grid gap-4 ${
               isLoggedIn
                 ? isAdmin
-                  ? "sm:grid-cols-2 lg:grid-cols-4"
+                  ? "sm:grid-cols-2 lg:grid-cols-5"
                   : "sm:grid-cols-2 lg:grid-cols-3"
                 : "sm:grid-cols-1"
             }`}
@@ -159,12 +166,28 @@ export default function HomePage() {
                 </Link>
 
                 {isAdmin ? (
-                  <Link
-                    href="/admin"
-                    className="rounded-xl border border-slate-300 px-4 py-3 text-center text-slate-700 hover:bg-slate-100"
-                  >
-                    Admin 總覽
-                  </Link>
+                  <>
+                    <Link
+                      href="/admin"
+                      className="rounded-xl border border-slate-300 px-4 py-3 text-center text-slate-700 hover:bg-slate-100"
+                    >
+                      Admin 規則頁
+                    </Link>
+
+                    <Link
+                      href="/admin/users"
+                      className="rounded-xl border border-slate-300 px-4 py-3 text-center text-slate-700 hover:bg-slate-100"
+                    >
+                      員工總覽
+                    </Link>
+
+                    <Link
+                      href="/admin/reports"
+                      className="rounded-xl border border-slate-300 px-4 py-3 text-center text-slate-700 hover:bg-slate-100"
+                    >
+                      全部填報
+                    </Link>
+                  </>
                 ) : null}
 
                 <button
