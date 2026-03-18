@@ -5,101 +5,50 @@ import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabase";
 import PageActionButtons from "../components/PageActionButtons";
 
-type RegionCategory = {
+type Profile = {
+  id: string;
+  display_name: string | null;
+  employee_code: string | null;
+  role: "admin" | "staff";
+};
+
+type DailyReport = {
   id: number;
-  region_name_zh: string;
-  sort_order: number;
-  is_non_mainland: boolean;
+  user_id: string;
+  report_date: string | null;
+  content: string | null;
+  created_at: string;
 };
 
-type MonthlyRegionRule = {
-  region_id: number;
-  rule_month: string;
-  quota: number | null;
-  basic_score: number | null;
-  extended_score: number | null;
-  balance_score: number | null;
+type ReportRow = DailyReport & {
+  profile: Profile | null;
 };
 
-type WeeklyMarketStatus = {
-  region_id: number;
-  week_start_date: string;
-  status_color: "red" | "yellow" | "green" | "grey" | null;
-  multiplier: number | null;
-};
-
-type AdminRow = {
-  region_id: number;
-  sort_order: number;
-  region_name_zh: string;
-  quota: string;
-  basic_score: string;
-  extended_score: string;
-  balance_score: string;
-  weekly_status_color: "" | "red" | "yellow" | "green" | "grey";
-};
-
-function getMonthStart() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  return `${year}-${month}-01`;
+function formatDate(value: string | null) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString();
 }
 
-function getWeekStart(dateString?: string) {
-  const date = dateString ? new Date(`${dateString}T00:00:00`) : new Date();
-  const day = date.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
-  date.setDate(date.getDate() + diff);
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const dayText = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${dayText}`;
+function formatDateTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
 }
 
-function statusToMultiplier(status: "" | "red" | "yellow" | "green" | "grey") {
-  switch (status) {
-    case "red":
-      return 1.4;
-    case "yellow":
-      return 1.2;
-    case "green":
-      return 1;
-    case "grey":
-      return 0;
-    default:
-      return null;
-  }
-}
-
-function multiplierLabel(status: "" | "red" | "yellow" | "green" | "grey") {
-  switch (status) {
-    case "red":
-      return "紅色 1.4";
-    case "yellow":
-      return "黃色 1.2";
-    case "green":
-      return "綠色 1";
-    case "grey":
-      return "灰色 0";
-    default:
-      return "-";
-  }
-}
-
-export default function AdminPage() {
+export default function AdminReportsPage() {
   const router = useRouter();
 
   const [loading, setLoading] = useState(true);
-  const [savingRules, setSavingRules] = useState(false);
-  const [savingWeekly, setSavingWeekly] = useState(false);
   const [message, setMessage] = useState("");
-
   const [displayName, setDisplayName] = useState("");
-  const [selectedMonth, setSelectedMonth] = useState(getMonthStart());
-  const [selectedWeekStart, setSelectedWeekStart] = useState(getWeekStart());
 
-  const [rows, setRows] = useState<AdminRow[]>([]);
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [reports, setReports] = useState<DailyReport[]>([]);
+
+  const [selectedUserId, setSelectedUserId] = useState("all");
+  const [keyword, setKeyword] = useState("");
 
   const loadPage = async () => {
     setLoading(true);
@@ -114,11 +63,17 @@ export default function AdminPage() {
       return;
     }
 
-    const { data: profileData } = await supabase
+    const { data: profileData, error: profileError } = await supabase
       .from("profiles")
       .select("display_name, role")
       .eq("id", user.id)
       .maybeSingle();
+
+    if (profileError) {
+      setMessage(profileError.message);
+      setLoading(false);
+      return;
+    }
 
     if (profileData?.role !== "admin") {
       router.replace("/dashboard");
@@ -127,169 +82,79 @@ export default function AdminPage() {
 
     setDisplayName(profileData?.display_name ?? user.email ?? "Admin");
 
-    const { data: regionData, error: regionError } = await supabase
-      .from("region_categories")
-      .select("id, region_name_zh, sort_order, is_non_mainland")
-      .order("sort_order", { ascending: true });
+    const { data: profilesData, error: profilesError } = await supabase
+      .from("profiles")
+      .select("id, display_name, employee_code, role")
+      .order("created_at", { ascending: false });
 
-    if (regionError) {
-      setMessage(regionError.message);
+    if (profilesError) {
+      setMessage(profilesError.message);
       setLoading(false);
       return;
     }
 
-    const { data: ruleData, error: ruleError } = await supabase
-      .from("monthly_region_rules")
-      .select("region_id, rule_month, quota, basic_score, extended_score, balance_score")
-      .eq("rule_month", selectedMonth);
+    const { data: reportsData, error: reportsError } = await supabase
+      .from("daily_reports")
+      .select("id, user_id, report_date, content, created_at")
+      .order("created_at", { ascending: false });
 
-    if (ruleError) {
-      setMessage(ruleError.message);
+    if (reportsError) {
+      setMessage(reportsError.message);
       setLoading(false);
       return;
     }
 
-    const { data: weeklyData, error: weeklyError } = await supabase
-      .from("weekly_market_status")
-      .select("region_id, week_start_date, status_color, multiplier")
-      .eq("week_start_date", selectedWeekStart);
-
-    if (weeklyError) {
-      setMessage(weeklyError.message);
-      setLoading(false);
-      return;
-    }
-
-    const regionList = (regionData ?? []) as RegionCategory[];
-    const ruleList = (ruleData ?? []) as MonthlyRegionRule[];
-    const weeklyList = (weeklyData ?? []) as WeeklyMarketStatus[];
-
-    const ruleMap = new Map<number, MonthlyRegionRule>();
-    ruleList.forEach((item) => {
-      ruleMap.set(item.region_id, item);
-    });
-
-    const weeklyMap = new Map<number, WeeklyMarketStatus>();
-    weeklyList.forEach((item) => {
-      weeklyMap.set(item.region_id, item);
-    });
-
-    const mergedRows: AdminRow[] = regionList.map((region) => {
-      const rule = ruleMap.get(region.id);
-      const weekly = weeklyMap.get(region.id);
-
-      return {
-        region_id: region.id,
-        sort_order: region.sort_order,
-        region_name_zh: region.region_name_zh,
-        quota: rule?.quota != null ? String(rule.quota) : "",
-        basic_score: rule?.basic_score != null ? String(rule.basic_score) : "",
-        extended_score: rule?.extended_score != null ? String(rule.extended_score) : "",
-        balance_score: rule?.balance_score != null ? String(rule.balance_score) : "",
-        weekly_status_color: (weekly?.status_color ?? "") as
-          | ""
-          | "red"
-          | "yellow"
-          | "green"
-          | "grey",
-      };
-    });
-
-    setRows(mergedRows);
+    setProfiles((profilesData ?? []) as Profile[]);
+    setReports((reportsData ?? []) as DailyReport[]);
     setLoading(false);
   };
 
   useEffect(() => {
     loadPage();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedMonth, selectedWeekStart]);
+  }, []);
 
-  const handleRowChange = (
-    regionId: number,
-    field: keyof Pick<
-      AdminRow,
-      "quota" | "basic_score" | "extended_score" | "balance_score" | "weekly_status_color"
-    >,
-    value: string
-  ) => {
-    setRows((prev) =>
-      prev.map((row) =>
-        row.region_id === regionId
-          ? {
-              ...row,
-              [field]: value,
-            }
-          : row
-      )
-    );
-  };
+  const profileMap = useMemo(() => {
+    const map = new Map<string, Profile>();
+    profiles.forEach((profile) => {
+      map.set(profile.id, profile);
+    });
+    return map;
+  }, [profiles]);
 
-  const handleSaveRules = async () => {
-    setSavingRules(true);
-    setMessage("");
+  const mergedRows = useMemo<ReportRow[]>(() => {
+    return reports.map((report) => ({
+      ...report,
+      profile: profileMap.get(report.user_id) ?? null,
+    }));
+  }, [reports, profileMap]);
 
-    const payload = rows
-      .filter(
-        (row) =>
-          row.quota !== "" ||
-          row.basic_score !== "" ||
-          row.extended_score !== "" ||
-          row.balance_score !== ""
-      )
-      .map((row) => ({
-        rule_month: selectedMonth,
-        region_id: row.region_id,
-        quota: row.quota === "" ? 0 : Number(row.quota),
-        basic_score: row.basic_score === "" ? 0 : Number(row.basic_score),
-        extended_score: row.extended_score === "" ? 0 : Number(row.extended_score),
-        balance_score: row.balance_score === "" ? 0 : Number(row.balance_score),
-      }));
+  const filteredRows = useMemo(() => {
+    const q = keyword.trim().toLowerCase();
 
-    const { error } = await supabase
-      .from("monthly_region_rules")
-      .upsert(payload, { onConflict: "rule_month,region_id" });
+    return mergedRows.filter((row) => {
+      const matchUser =
+        selectedUserId === "all" ? true : row.user_id === selectedUserId;
 
-    if (error) {
-      setMessage(error.message);
-      setSavingRules(false);
-      return;
-    }
+      if (!matchUser) return false;
 
-    setMessage("本月地區規則已儲存。");
-    setSavingRules(false);
-    await loadPage();
-  };
+      if (!q) return true;
 
-  const handleSaveWeekly = async () => {
-    setSavingWeekly(true);
-    setMessage("");
+      const name = (row.profile?.display_name ?? "").toLowerCase();
+      const code = (row.profile?.employee_code ?? "").toLowerCase();
+      const role = (row.profile?.role ?? "").toLowerCase();
+      const reportDate = (row.report_date ?? "").toLowerCase();
+      const content = (row.content ?? "").toLowerCase();
 
-    const payload = rows
-      .filter((row) => row.weekly_status_color !== "")
-      .map((row) => ({
-        week_start_date: selectedWeekStart,
-        region_id: row.region_id,
-        status_color: row.weekly_status_color,
-        multiplier: statusToMultiplier(row.weekly_status_color),
-        note: null,
-      }));
-
-    const { error } = await supabase
-      .from("weekly_market_status")
-      .upsert(payload, { onConflict: "week_start_date,region_id" });
-
-    if (error) {
-      setMessage(error.message);
-      setSavingWeekly(false);
-      return;
-    }
-
-    setMessage("本週市場調整分數已儲存。");
-    setSavingWeekly(false);
-    await loadPage();
-  };
-
-  const totalRegions = useMemo(() => rows.length, [rows]);
+      return (
+        name.includes(q) ||
+        code.includes(q) ||
+        role.includes(q) ||
+        reportDate.includes(q) ||
+        content.includes(q)
+      );
+    });
+  }, [mergedRows, selectedUserId, keyword]);
 
   if (loading) {
     return (
@@ -306,46 +171,65 @@ export default function AdminPage() {
       <div className="mx-auto max-w-7xl space-y-6">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">Admin 規則設定</h1>
+            <h1 className="text-2xl font-bold text-slate-900">Admin 全部員工填報</h1>
             <p className="mt-1 text-sm text-slate-600">管理員：{displayName}</p>
-            <p className="mt-1 text-sm text-slate-500">地區數量：{totalRegions}</p>
+            <p className="mt-1 text-sm text-slate-500">
+              目前顯示：{filteredRows.length} 筆
+            </p>
           </div>
 
           <PageActionButtons />
         </div>
 
         <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-          <div className="mt-0 grid gap-4 md:grid-cols-2">
+          <div className="grid gap-4 md:grid-cols-2">
             <div>
-              <label className="mb-2 block text-sm font-medium text-slate-700">規則月份</label>
-              <input
-                type="date"
-                value={selectedMonth}
-                onChange={(e) => {
-                  const value = e.target.value;
-                  const monthDate = new Date(`${value}T00:00:00`);
-                  monthDate.setDate(1);
-                  const year = monthDate.getFullYear();
-                  const month = String(monthDate.getMonth() + 1).padStart(2, "0");
-                  setSelectedMonth(`${year}-${month}-01`);
-                }}
+              <label className="mb-2 block text-sm font-medium text-slate-700">
+                篩選員工
+              </label>
+              <select
+                value={selectedUserId}
+                onChange={(e) => setSelectedUserId(e.target.value)}
                 className="w-full rounded-xl border border-slate-300 px-4 py-2 text-sm outline-none focus:border-slate-500"
-              />
+              >
+                <option value="all">全部員工</option>
+                {profiles.map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.display_name ?? "未命名用戶"}
+                    {profile.employee_code ? `（${profile.employee_code}）` : ""}
+                  </option>
+                ))}
+              </select>
             </div>
 
             <div>
               <label className="mb-2 block text-sm font-medium text-slate-700">
-                每星期調整起始日（週一）
+                搜尋
               </label>
               <input
-                type="date"
-                value={selectedWeekStart}
-                onChange={(e) => {
-                  setSelectedWeekStart(getWeekStart(e.target.value));
-                }}
+                type="text"
+                value={keyword}
+                onChange={(e) => setKeyword(e.target.value)}
+                placeholder="搜尋姓名 / 員工編號 / 日期 / 內容"
                 className="w-full rounded-xl border border-slate-300 px-4 py-2 text-sm outline-none focus:border-slate-500"
               />
             </div>
+          </div>
+
+          <div className="mt-4 flex flex-wrap gap-3">
+            <button
+              onClick={loadPage}
+              className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
+            >
+              重新整理
+            </button>
+
+            <button
+              onClick={() => router.push("/admin")}
+              className="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100"
+            >
+              返回規則頁
+            </button>
           </div>
 
           {message ? (
@@ -356,141 +240,64 @@ export default function AdminPage() {
         </div>
 
         <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <h2 className="text-lg font-semibold text-slate-900">
-              {totalRegions} 個地區類別規則設定
-            </h2>
-
-            <div className="flex flex-wrap gap-3">
-              <button
-                onClick={handleSaveRules}
-                disabled={savingRules}
-                className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800 disabled:opacity-50"
-              >
-                {savingRules ? "儲存中..." : "儲存本月規則"}
-              </button>
-
-              <button
-                onClick={handleSaveWeekly}
-                disabled={savingWeekly}
-                className="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 disabled:opacity-50"
-              >
-                {savingWeekly ? "儲存中..." : "儲存本週調整"}
-              </button>
-            </div>
-          </div>
-
-          <div className="mt-6 overflow-x-auto">
+          <div className="overflow-x-auto">
             <table className="min-w-full border-collapse">
               <thead>
                 <tr className="border-b border-slate-200 text-left text-sm font-semibold text-slate-600">
-                  <th className="px-3 py-3">序號</th>
-                  <th className="px-3 py-3">地區</th>
-                  <th className="px-3 py-3">建議配額</th>
-                  <th className="px-3 py-3">基本分數</th>
-                  <th className="px-3 py-3">延伸分數</th>
-                  <th className="px-3 py-3">平衡分數</th>
-                  <th className="px-3 py-3">每星期調整分數</th>
+                  <th className="px-3 py-3">員工名稱</th>
+                  <th className="px-3 py-3">員工編號</th>
+                  <th className="px-3 py-3">角色</th>
+                  <th className="px-3 py-3">填報日期</th>
+                  <th className="px-3 py-3">填報內容</th>
+                  <th className="px-3 py-3">建立時間</th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row) => (
-                  <tr key={row.region_id} className="border-b border-slate-100 text-sm">
-                    <td className="px-3 py-3">{row.sort_order}</td>
-                    <td className="px-3 py-3">{row.region_name_zh}</td>
-
-                    <td className="px-3 py-3">
-                      <input
-                        type="number"
-                        min="0"
-                        step="1"
-                        placeholder="留空待填"
-                        value={row.quota}
-                        onChange={(e) => handleRowChange(row.region_id, "quota", e.target.value)}
-                        className="w-28 rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
-                      />
-                    </td>
-
-                    <td className="px-3 py-3">
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        placeholder="留空待填"
-                        value={row.basic_score}
-                        onChange={(e) =>
-                          handleRowChange(row.region_id, "basic_score", e.target.value)
-                        }
-                        className="w-28 rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
-                      />
-                    </td>
-
-                    <td className="px-3 py-3">
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        placeholder="留空待填"
-                        value={row.extended_score}
-                        onChange={(e) =>
-                          handleRowChange(row.region_id, "extended_score", e.target.value)
-                        }
-                        className="w-28 rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
-                      />
-                    </td>
-
-                    <td className="px-3 py-3">
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        placeholder="留空待填"
-                        value={row.balance_score}
-                        onChange={(e) =>
-                          handleRowChange(row.region_id, "balance_score", e.target.value)
-                        }
-                        className="w-28 rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
-                      />
-                    </td>
-
-                    <td className="px-3 py-3">
-                      <div className="flex flex-col gap-2">
-                        <select
-                          value={row.weekly_status_color}
-                          onChange={(e) =>
-                            handleRowChange(
-                              row.region_id,
-                              "weekly_status_color",
-                              e.target.value as "" | "red" | "yellow" | "green" | "grey"
-                            )
-                          }
-                          className="w-40 rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
-                        >
-                          <option value="">留空待用</option>
-                          <option value="red">紅色：1.4</option>
-                          <option value="yellow">黃色：1.2</option>
-                          <option value="green">綠色：1</option>
-                          <option value="grey">灰色：0</option>
-                        </select>
-
-                        <span className="text-xs text-slate-500">
-                          目前：{multiplierLabel(row.weekly_status_color)}
-                        </span>
-                      </div>
+                {filteredRows.length === 0 ? (
+                  <tr>
+                    <td className="px-3 py-6 text-sm text-slate-500" colSpan={6}>
+                      目前沒有符合條件的填報資料。
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  filteredRows.map((row) => (
+                    <tr key={row.id} className="border-b border-slate-100 text-sm">
+                      <td className="px-3 py-3">
+                        {row.profile?.display_name ?? "-"}
+                      </td>
+                      <td className="px-3 py-3">
+                        {row.profile?.employee_code ?? "-"}
+                      </td>
+                      <td className="px-3 py-3">
+                        <span
+                          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
+                            row.profile?.role === "admin"
+                              ? "bg-red-100 text-red-700"
+                              : "bg-blue-100 text-blue-700"
+                          }`}
+                        >
+                          {row.profile?.role ?? "-"}
+                        </span>
+                      </td>
+                      <td className="px-3 py-3">{formatDate(row.report_date)}</td>
+                      <td className="px-3 py-3 whitespace-pre-wrap break-words">
+                        {row.content ?? "-"}
+                      </td>
+                      <td className="px-3 py-3">
+                        {formatDateTime(row.created_at)}
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
 
           <div className="mt-6 rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
-            <p>計分規則說明：</p>
-            <p className="mt-2">1. 基本分數：累計完成率 ≤ 100%</p>
-            <p>2. 延伸分數：累計完成率 &gt; 100% 且 ≤ 130%</p>
-            <p>3. 平衡分數：累計完成率 &gt; 130%</p>
-            <p>4. 配額統計口徑：全公司在該月該地區的累計份數</p>
-            <p>5. 每星期調整分數：最終單份分數 = 階段分數 × 每週 multiplier</p>
+            <p>說明：</p>
+            <p className="mt-2">1. 此頁只供 admin 查看全部員工填報資料。</p>
+            <p>2. 可用上方員工篩選及關鍵字搜尋快速查閱記錄。</p>
+            <p>3. 員工帳戶本身只應看到自己的 dashboard、每日填報及個人歷史記錄。</p>
           </div>
         </div>
       </div>

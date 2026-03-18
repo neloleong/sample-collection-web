@@ -2,11 +2,11 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { supabase } from "../../lib/supabase";
 
 type ProfileRow = {
-  role: "user" | "admin";
+  role: "staff" | "admin";
 };
 
 function getMonthStart() {
@@ -18,6 +18,8 @@ function getMonthStart() {
 
 export default function PageActionButtons() {
   const router = useRouter();
+  const pathname = usePathname();
+
   const [isAdmin, setIsAdmin] = useState(false);
   const [recalcLoading, setRecalcLoading] = useState(false);
 
@@ -39,7 +41,7 @@ export default function PageActionButtons() {
       setIsAdmin(profile?.role === "admin");
     };
 
-    loadProfile();
+    void loadProfile();
   }, []);
 
   const handleRecalculate = async () => {
@@ -69,13 +71,15 @@ export default function PageActionButtons() {
 
   return (
     <div className="flex flex-wrap gap-3">
-      <button
-        onClick={handleRecalculate}
-        disabled={recalcLoading}
-        className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800 disabled:opacity-50"
-      >
-        {recalcLoading ? "計算中..." : "重新計算本月結算"}
-      </button>
+      {isAdmin ? (
+        <button
+          onClick={handleRecalculate}
+          disabled={recalcLoading}
+          className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800 disabled:opacity-50"
+        >
+          {recalcLoading ? "計算中..." : "重新計算本月結算"}
+        </button>
+      ) : null}
 
       <Link
         href="/dashboard"
@@ -85,12 +89,28 @@ export default function PageActionButtons() {
       </Link>
 
       {isAdmin ? (
-        <Link
-          href="/admin"
-          className="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100"
-        >
-          Admin 總覽
-        </Link>
+        <>
+          <Link
+            href="/admin"
+            className="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100"
+          >
+            Admin 規則頁
+          </Link>
+
+          <Link
+            href="/admin/users"
+            className="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100"
+          >
+            員工總覽
+          </Link>
+
+          <Link
+            href="/admin/reports"
+            className="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100"
+          >
+            全部填報
+          </Link>
+        </>
       ) : null}
 
       <Link
