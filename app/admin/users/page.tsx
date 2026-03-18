@@ -119,6 +119,9 @@ export default function AdminUsersPage() {
         data: { session },
       } = await supabase.auth.getSession();
 
+      console.log("SESSION EXISTS:", !!session);
+      console.log("ACCESS TOKEN EXISTS:", !!session?.access_token);
+
       if (!session?.access_token) {
         setError("目前登入狀態無效，請重新登入。");
         return;
