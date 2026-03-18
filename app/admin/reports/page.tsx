@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient, User } from "@supabase/supabase-js";
+import { supabase } from "@/lib/supabase";
+import PageActionButtons from "@/app/components/PageActionButtons";
 
 type Profile = {
   id: string;
@@ -23,32 +24,44 @@ type ReportRow = DailyReport & {
   profile: Profile | null;
 };
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL as string,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY as string
-);
+function normalizeRole(role: unknown): "admin" | "staff" {
+  const r = String(role ?? "").toLowerCase().trim();
+  return r === "admin" ? "admin" : "staff";
+}
+
+function formatDate(value: string | null) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString();
+}
+
+function formatDateTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
+}
 
 export default function AdminReportsPage() {
   const router = useRouter();
 
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [currentRole, setCurrentRole] = useState<"admin" | "staff" | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [displayName, setDisplayName] = useState("");
 
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [reports, setReports] = useState<DailyReport[]>([]);
 
   const [selectedUserId, setSelectedUserId] = useState("all");
   const [keyword, setKeyword] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [pageError, setPageError] = useState("");
 
   useEffect(() => {
-    void initPage();
+    void init();
   }, []);
 
-  async function initPage() {
+  async function init() {
     setLoading(true);
-    setPageError("");
+    setError("");
 
     try {
       const {
@@ -61,106 +74,72 @@ export default function AdminReportsPage() {
         return;
       }
 
-      setCurrentUser(user);
-
-      const { data: myProfile, error: myProfileError } = await supabase
+      const { data: profileData, error: profileError } = await supabase
         .from("profiles")
-        .select("role")
+        .select("display_name, role")
         .eq("id", user.id)
         .single();
 
-      if (myProfileError || !myProfile) {
-        setPageError(myProfileError?.message ?? "讀取目前帳戶角色失敗。");
-        setLoading(false);
+      if (profileError) {
+        setError(profileError.message);
         return;
       }
 
-      const myRole: "admin" | "staff" =
-        myProfile.role === "admin" ? "admin" : "staff";
-
-      setCurrentRole(myRole);
-
-      if (myRole !== "admin") {
+      if (normalizeRole(profileData?.role) !== "admin") {
         router.replace("/dashboard");
         return;
       }
 
-      await Promise.all([loadProfiles(), loadReports()]);
-      setLoading(false);
-    } catch (error) {
-      setPageError(
-        error instanceof Error ? error.message : "初始化頁面失敗。"
+      setDisplayName(profileData?.display_name || user.email || "Admin");
+
+      const { data: profilesData, error: profilesError } = await supabase
+        .from("profiles")
+        .select("id, display_name, employee_code, role")
+        .order("created_at", { ascending: false });
+
+      if (profilesError) {
+        setError(profilesError.message);
+        return;
+      }
+
+      const { data: reportsData, error: reportsError } = await supabase
+        .from("daily_reports")
+        .select("id, user_id, report_date, content, created_at")
+        .order("created_at", { ascending: false });
+
+      if (reportsError) {
+        setError(reportsError.message);
+        return;
+      }
+
+      setProfiles(
+        (profilesData ?? []).map((p: any) => ({
+          id: p.id,
+          display_name: p.display_name,
+          employee_code: p.employee_code,
+          role: normalizeRole(p.role),
+        }))
       );
-      setLoading(false);
-    }
-  }
 
-  async function loadProfiles() {
-    const { data, error } = await supabase
-      .from("profiles")
-      .select("id, display_name, employee_code, role")
-      .order("created_at", { ascending: false });
-
-    if (error) {
-      throw new Error(`讀取員工資料失敗：${error.message}`);
-    }
-
-    const profileList: Profile[] = (data ?? []).map((item: any) => ({
-      id: item.id,
-      display_name: item.display_name,
-      employee_code: item.employee_code,
-      role: item.role === "admin" ? "admin" : "staff",
-    }));
-
-    setProfiles(profileList);
-  }
-
-  async function loadReports() {
-    const { data, error } = await supabase
-      .from("daily_reports")
-      .select("id, user_id, report_date, content, created_at")
-      .order("created_at", { ascending: false });
-
-    if (error) {
-      throw new Error(`讀取填報資料失敗：${error.message}`);
-    }
-
-    const reportList: DailyReport[] = (data ?? []).map((item: any) => ({
-      id: item.id,
-      user_id: item.user_id,
-      report_date: item.report_date,
-      content: item.content,
-      created_at: item.created_at,
-    }));
-
-    setReports(reportList);
-  }
-
-  async function handleRefresh() {
-    setLoading(true);
-    setPageError("");
-
-    try {
-      await Promise.all([loadProfiles(), loadReports()]);
-      setLoading(false);
-    } catch (error) {
-      setPageError(
-        error instanceof Error ? error.message : "重新整理失敗。"
+      setReports(
+        (reportsData ?? []).map((r: any) => ({
+          id: r.id,
+          user_id: r.user_id,
+          report_date: r.report_date,
+          content: r.content,
+          created_at: r.created_at,
+        }))
       );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "讀取全部員工填報失敗");
+    } finally {
       setLoading(false);
     }
-  }
-
-  async function handleSignOut() {
-    await supabase.auth.signOut();
-    router.replace("/login");
   }
 
   const profileMap = useMemo(() => {
     const map = new Map<string, Profile>();
-    profiles.forEach((profile) => {
-      map.set(profile.id, profile);
-    });
+    profiles.forEach((p) => map.set(p.id, p));
     return map;
   }, [profiles]);
 
@@ -179,323 +158,145 @@ export default function AdminReportsPage() {
         selectedUserId === "all" ? true : row.user_id === selectedUserId;
 
       if (!matchUser) return false;
-
       if (!q) return true;
 
-      const displayName = (row.profile?.display_name ?? "").toLowerCase();
-      const employeeCode = (row.profile?.employee_code ?? "").toLowerCase();
-      const content = (row.content ?? "").toLowerCase();
-      const reportDate = (row.report_date ?? "").toLowerCase();
-      const role = (row.profile?.role ?? "").toLowerCase();
-
       return (
-        displayName.includes(q) ||
-        employeeCode.includes(q) ||
-        content.includes(q) ||
-        reportDate.includes(q) ||
-        role.includes(q)
+        (row.profile?.display_name || "").toLowerCase().includes(q) ||
+        (row.profile?.employee_code || "").toLowerCase().includes(q) ||
+        (row.profile?.role || "").toLowerCase().includes(q) ||
+        (row.report_date || "").toLowerCase().includes(q) ||
+        (row.content || "").toLowerCase().includes(q)
       );
     });
   }, [mergedRows, selectedUserId, keyword]);
 
-  function formatDateTime(value: string) {
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return value;
-    return date.toLocaleString();
-  }
-
-  function formatDate(value: string | null) {
-    if (!value) return "-";
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return value;
-    return date.toLocaleDateString();
-  }
-
   if (loading) {
-    return (
-      <div style={styles.page}>
-        <div style={styles.card}>
-          <h1 style={styles.title}>Admin / 全部員工填報</h1>
-          <p>載入中...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (pageError) {
-    return (
-      <div style={styles.page}>
-        <div style={styles.card}>
-          <h1 style={styles.title}>Admin / 全部員工填報</h1>
-          <p style={styles.error}>{pageError}</p>
-          <div style={styles.row}>
-            <button style={styles.button} onClick={() => void initPage()}>
-              重新載入
-            </button>
-            <button style={styles.buttonSecondary} onClick={handleSignOut}>
-              登出
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (currentRole !== "admin") {
-    return null;
+    return <div className="p-6">Loading...</div>;
   }
 
   return (
-    <div style={styles.page}>
-      <div style={styles.card}>
-        <div style={styles.header}>
+    <main className="min-h-screen bg-slate-50 px-6 py-10">
+      <div className="mx-auto max-w-7xl space-y-6">
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
-            <h1 style={styles.title}>Admin / 全部員工填報</h1>
-            <p style={styles.subtext}>
+            <h1 className="text-2xl font-bold text-slate-900">Admin / 全部員工填報</h1>
+            <p className="mt-1 text-sm text-slate-600">
               可一次查看全部員工每日填報，並按員工或關鍵字篩選。
             </p>
+            <div className="mt-3 flex flex-wrap gap-3 text-sm">
+              <span className="inline-flex rounded-full bg-blue-100 px-3 py-1 text-blue-700">
+                管理員：{displayName}
+              </span>
+              <span className="inline-flex rounded-full bg-slate-100 px-3 py-1 text-slate-700">
+                目前顯示：{filteredRows.length} 筆
+              </span>
+            </div>
           </div>
 
-          <div style={styles.row}>
-            <button style={styles.button} onClick={() => void handleRefresh()}>
-              重新整理
-            </button>
-            <button
-              style={styles.buttonSecondary}
-              onClick={() => router.push("/admin")}
-            >
-              返回 Admin
-            </button>
-            <button style={styles.buttonSecondary} onClick={handleSignOut}>
-              登出
-            </button>
+          <PageActionButtons />
+        </div>
+
+        <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+          <div className="grid gap-4 md:grid-cols-2">
+            <div>
+              <label className="mb-2 block text-sm font-medium text-slate-700">
+                篩選員工
+              </label>
+              <select
+                value={selectedUserId}
+                onChange={(e) => setSelectedUserId(e.target.value)}
+                className="w-full rounded-xl border border-slate-300 px-4 py-2 text-sm outline-none focus:border-slate-500"
+              >
+                <option value="all">全部員工</option>
+                {profiles.map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.display_name ?? "未命名用戶"}
+                    {profile.employee_code ? `（${profile.employee_code}）` : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="mb-2 block text-sm font-medium text-slate-700">
+                搜尋
+              </label>
+              <input
+                type="text"
+                value={keyword}
+                onChange={(e) => setKeyword(e.target.value)}
+                placeholder="搜尋姓名 / 員工編號 / 日期 / 內容"
+                className="w-full rounded-xl border border-slate-300 px-4 py-2 text-sm outline-none focus:border-slate-500"
+              />
+            </div>
           </div>
         </div>
 
-        <div style={styles.filters}>
-          <select
-            style={styles.select}
-            value={selectedUserId}
-            onChange={(e) => setSelectedUserId(e.target.value)}
-          >
-            <option value="all">全部員工</option>
-            {profiles.map((profile) => (
-              <option key={profile.id} value={profile.id}>
-                {profile.display_name ?? "未命名"}{" "}
-                {profile.employee_code ? `(${profile.employee_code})` : ""}
-              </option>
-            ))}
-          </select>
-
-          <input
-            style={styles.input}
-            placeholder="搜尋姓名 / 員工編號 / 日期 / 內容"
-            value={keyword}
-            onChange={(e) => setKeyword(e.target.value)}
-          />
-        </div>
-
-        <div style={styles.summaryWrap}>
-          <span style={styles.summaryText}>目前登入：admin</span>
-          <span style={styles.summaryText}>報告總數：{filteredRows.length}</span>
-          <span style={styles.summaryText}>
-            登入者：{currentUser?.email ?? "-"}
-          </span>
-        </div>
-
-        <div style={styles.tableWrap}>
-          <table style={styles.table}>
-            <thead>
-              <tr>
-                <th style={styles.th}>員工名稱</th>
-                <th style={styles.th}>員工編號</th>
-                <th style={styles.th}>角色</th>
-                <th style={styles.th}>填報日期</th>
-                <th style={styles.th}>填報內容</th>
-                <th style={styles.th}>建立時間</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredRows.length === 0 ? (
-                <tr>
-                  <td style={styles.td} colSpan={6}>
-                    目前沒有符合條件的填報資料。
-                  </td>
+        <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+          <div className="overflow-x-auto">
+            <table className="min-w-full border-collapse">
+              <thead>
+                <tr className="border-b border-slate-200 text-left text-sm font-semibold text-slate-600">
+                  <th className="px-3 py-3">員工名稱</th>
+                  <th className="px-3 py-3">員工編號</th>
+                  <th className="px-3 py-3">角色</th>
+                  <th className="px-3 py-3">填報日期</th>
+                  <th className="px-3 py-3">填報內容</th>
+                  <th className="px-3 py-3">建立時間</th>
                 </tr>
-              ) : (
-                filteredRows.map((row) => (
-                  <tr key={row.id}>
-                    <td style={styles.td}>{row.profile?.display_name ?? "-"}</td>
-                    <td style={styles.td}>{row.profile?.employee_code ?? "-"}</td>
-                    <td style={styles.td}>
-                      <span
-                        style={
-                          row.profile?.role === "admin"
-                            ? styles.roleAdmin
-                            : styles.roleStaff
-                        }
-                      >
-                        {row.profile?.role ?? "-"}
-                      </span>
+              </thead>
+
+              <tbody>
+                {filteredRows.length === 0 ? (
+                  <tr>
+                    <td className="px-3 py-6 text-sm text-slate-500" colSpan={6}>
+                      目前沒有符合條件的填報資料。
                     </td>
-                    <td style={styles.td}>{formatDate(row.report_date)}</td>
-                    <td style={styles.tdContent}>{row.content ?? "-"}</td>
-                    <td style={styles.td}>{formatDateTime(row.created_at)}</td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                ) : (
+                  filteredRows.map((row) => (
+                    <tr key={row.id} className="border-b border-slate-100 text-sm">
+                      <td className="px-3 py-3">{row.profile?.display_name ?? "-"}</td>
+                      <td className="px-3 py-3">{row.profile?.employee_code ?? "-"}</td>
+                      <td className="px-3 py-3">
+                        <span
+                          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
+                            row.profile?.role === "admin"
+                              ? "bg-red-100 text-red-700"
+                              : "bg-blue-100 text-blue-700"
+                          }`}
+                        >
+                          {(row.profile?.role ?? "-").toUpperCase()}
+                        </span>
+                      </td>
+                      <td className="px-3 py-3">{formatDate(row.report_date)}</td>
+                      <td className="px-3 py-3 whitespace-pre-wrap break-words">
+                        {row.content ?? "-"}
+                      </td>
+                      <td className="px-3 py-3">
+                        {formatDateTime(row.created_at)}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="mt-6 rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
+            <p>說明：</p>
+            <p className="mt-2">1. 此頁只供 admin 查看全部員工填報資料。</p>
+            <p>2. 可用上方員工篩選及關鍵字搜尋快速查閱記錄。</p>
+            <p>3. 員工帳戶本身只應看到自己的 dashboard、每日填報及個人歷史記錄。</p>
+          </div>
+
+          {error ? (
+            <div className="mt-4 rounded-xl bg-slate-50 px-4 py-3 text-sm text-red-500">
+              {error}
+            </div>
+          ) : null}
         </div>
       </div>
-    </div>
+    </main>
   );
 }
-
-const styles: Record<string, React.CSSProperties> = {
-  page: {
-    minHeight: "100vh",
-    background: "#f6f7fb",
-    padding: "24px",
-  },
-  card: {
-    maxWidth: "1400px",
-    margin: "0 auto",
-    background: "#ffffff",
-    borderRadius: "16px",
-    padding: "24px",
-    boxShadow: "0 10px 30px rgba(0,0,0,0.08)",
-  },
-  header: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    gap: "16px",
-    flexWrap: "wrap",
-    marginBottom: "20px",
-  },
-  title: {
-    margin: 0,
-    fontSize: "28px",
-    fontWeight: 700,
-  },
-  subtext: {
-    marginTop: "8px",
-    color: "#666",
-  },
-  row: {
-    display: "flex",
-    gap: "12px",
-    flexWrap: "wrap",
-  },
-  filters: {
-    display: "flex",
-    gap: "12px",
-    flexWrap: "wrap",
-    marginBottom: "16px",
-  },
-  select: {
-    minWidth: "260px",
-    padding: "12px 14px",
-    borderRadius: "10px",
-    border: "1px solid #d7dbe7",
-    fontSize: "14px",
-    background: "#fff",
-  },
-  input: {
-    flex: 1,
-    minWidth: "260px",
-    padding: "12px 14px",
-    borderRadius: "10px",
-    border: "1px solid #d7dbe7",
-    fontSize: "14px",
-    outline: "none",
-  },
-  summaryWrap: {
-    display: "flex",
-    gap: "12px",
-    flexWrap: "wrap",
-    marginBottom: "16px",
-  },
-  summaryText: {
-    display: "inline-block",
-    padding: "8px 12px",
-    borderRadius: "999px",
-    background: "#eef2ff",
-    color: "#3730a3",
-    fontSize: "13px",
-    fontWeight: 600,
-  },
-  tableWrap: {
-    overflowX: "auto",
-  },
-  table: {
-    width: "100%",
-    borderCollapse: "collapse",
-    minWidth: "1200px",
-  },
-  th: {
-    textAlign: "left",
-    padding: "14px 12px",
-    borderBottom: "1px solid #e5e7ef",
-    background: "#fafbff",
-    fontSize: "14px",
-  },
-  td: {
-    padding: "14px 12px",
-    borderBottom: "1px solid #eef1f6",
-    fontSize: "14px",
-    verticalAlign: "top",
-  },
-  tdContent: {
-    padding: "14px 12px",
-    borderBottom: "1px solid #eef1f6",
-    fontSize: "14px",
-    whiteSpace: "pre-wrap",
-    wordBreak: "break-word",
-    minWidth: "360px",
-    verticalAlign: "top",
-  },
-  button: {
-    padding: "10px 14px",
-    borderRadius: "10px",
-    border: "none",
-    cursor: "pointer",
-    background: "#111827",
-    color: "#ffffff",
-    fontWeight: 600,
-  },
-  buttonSecondary: {
-    padding: "10px 14px",
-    borderRadius: "10px",
-    border: "1px solid #d1d5db",
-    cursor: "pointer",
-    background: "#ffffff",
-    color: "#111827",
-    fontWeight: 600,
-  },
-  error: {
-    color: "#b91c1c",
-    marginBottom: "16px",
-  },
-  roleAdmin: {
-    display: "inline-block",
-    padding: "4px 10px",
-    borderRadius: "999px",
-    background: "#fee2e2",
-    color: "#991b1b",
-    fontWeight: 700,
-    fontSize: "12px",
-    textTransform: "uppercase",
-  },
-  roleStaff: {
-    display: "inline-block",
-    padding: "4px 10px",
-    borderRadius: "999px",
-    background: "#dbeafe",
-    color: "#1d4ed8",
-    fontWeight: 700,
-    fontSize: "12px",
-    textTransform: "uppercase",
-  },
-};
