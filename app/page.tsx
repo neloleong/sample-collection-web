@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 
 type Profile = {
+  id: string;
   display_name: string | null;
   employee_code: string | null;
   role: "admin" | "staff" | null;
@@ -49,7 +50,7 @@ export default function HomePage() {
       setEmployeeCode("");
       setRole("");
       setDebugMessage(
-        `未登入，或未取得 auth user。SUPABASE URL = ${
+        `未登入，或未取得 auth user｜SUPABASE URL = ${
           process.env.NEXT_PUBLIC_SUPABASE_URL ?? "undefined"
         }`
       );
@@ -59,27 +60,33 @@ export default function HomePage() {
 
     setIsLoggedIn(true);
 
-    const { data: profileData, error: profileError } = await supabase
+    const { data: profileRows, error: profileError } = await supabase
       .from("profiles")
-      .select("display_name, employee_code, role")
-      .eq("id", user.id)
-      .maybeSingle();
+      .select("id, display_name, employee_code, role")
+      .eq("id", user.id);
 
     console.log("user.id =", user.id);
-    console.log("profileData =", profileData);
+    console.log("profileRows =", profileRows);
     console.log("profileError =", profileError);
-    console.log("profile role =", profileData?.role);
 
     if (profileError) {
       console.error("讀取 profile 失敗：", profileError.message);
       setDebugMessage(
-        `讀取 profile 失敗：${profileError.message}｜SUPABASE URL = ${
+        `讀取 profile 失敗：${profileError.message}｜session=${!!session?.access_token}｜SUPABASE URL = ${
           process.env.NEXT_PUBLIC_SUPABASE_URL ?? "undefined"
         }`
       );
+      setLoading(false);
+      return;
     }
 
-    const profile = (profileData as Profile | null) ?? null;
+    const profile =
+      Array.isArray(profileRows) && profileRows.length > 0
+        ? (profileRows[0] as Profile)
+        : null;
+
+    console.log("profile =", profile);
+    console.log("profile role =", profile?.role);
 
     const resolvedRole: "admin" | "staff" =
       profile?.role === "admin" ? "admin" : "staff";
