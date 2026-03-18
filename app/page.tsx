@@ -33,8 +33,14 @@ export default function HomePage() {
       error: userError,
     } = await supabase.auth.getUser();
 
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
     console.log("auth user =", user);
     console.log("auth userError =", userError);
+    console.log("session =", session);
+    console.log("session access token exists =", !!session?.access_token);
 
     if (!user) {
       setIsLoggedIn(false);
@@ -85,7 +91,7 @@ export default function HomePage() {
 
     if (!profile) {
       setDebugMessage(
-        `找不到 profiles 資料｜user.id = ${user.id}｜SUPABASE URL = ${
+        `找不到 profiles 資料｜user.id = ${user.id}｜session=${!!session?.access_token}｜SUPABASE URL = ${
           process.env.NEXT_PUBLIC_SUPABASE_URL ?? "undefined"
         }`
       );
@@ -93,7 +99,7 @@ export default function HomePage() {
       setDebugMessage(
         `user.id = ${user.id}｜profiles.role = ${
           profile.role ?? "null"
-        }｜SUPABASE URL = ${
+        }｜session=${!!session?.access_token}｜SUPABASE URL = ${
           process.env.NEXT_PUBLIC_SUPABASE_URL ?? "undefined"
         }`
       );

@@ -82,7 +82,7 @@ export default function AdminUsersPage() {
         return;
       }
 
-      const myRole =
+      const myRole: "admin" | "staff" =
         myProfile.role === "admin" ? "admin" : "staff";
 
       setCurrentRole(myRole);
