@@ -23,6 +23,11 @@ export default function HomePage() {
     setLoading(true);
     setDebugMessage("");
 
+    console.log(
+      "SUPABASE URL =",
+      process.env.NEXT_PUBLIC_SUPABASE_URL ?? "undefined"
+    );
+
     const {
       data: { user },
       error: userError,
@@ -37,7 +42,11 @@ export default function HomePage() {
       setDisplayName("");
       setEmployeeCode("");
       setRole("");
-      setDebugMessage("未登入，或未取得 auth user。");
+      setDebugMessage(
+        `未登入，或未取得 auth user。SUPABASE URL = ${
+          process.env.NEXT_PUBLIC_SUPABASE_URL ?? "undefined"
+        }`
+      );
       setLoading(false);
       return;
     }
@@ -57,7 +66,11 @@ export default function HomePage() {
 
     if (profileError) {
       console.error("讀取 profile 失敗：", profileError.message);
-      setDebugMessage(`讀取 profile 失敗：${profileError.message}`);
+      setDebugMessage(
+        `讀取 profile 失敗：${profileError.message}｜SUPABASE URL = ${
+          process.env.NEXT_PUBLIC_SUPABASE_URL ?? "undefined"
+        }`
+      );
     }
 
     const profile = (profileData as Profile | null) ?? null;
@@ -71,10 +84,18 @@ export default function HomePage() {
     setIsAdmin(resolvedRole === "admin");
 
     if (!profile) {
-      setDebugMessage(`找不到 profiles 資料，當前 user.id = ${user.id}`);
+      setDebugMessage(
+        `找不到 profiles 資料｜user.id = ${user.id}｜SUPABASE URL = ${
+          process.env.NEXT_PUBLIC_SUPABASE_URL ?? "undefined"
+        }`
+      );
     } else {
       setDebugMessage(
-        `目前 user.id = ${user.id}，profiles.role = ${profile.role ?? "null"}`
+        `user.id = ${user.id}｜profiles.role = ${
+          profile.role ?? "null"
+        }｜SUPABASE URL = ${
+          process.env.NEXT_PUBLIC_SUPABASE_URL ?? "undefined"
+        }`
       );
     }
 
