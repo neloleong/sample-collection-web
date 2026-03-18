@@ -13,6 +13,14 @@ type Profile = {
   created_at?: string;
 };
 
+type CreateUserForm = {
+  email: string;
+  password: string;
+  display_name: string;
+  employee_code: string;
+  role: "admin" | "staff";
+};
+
 function normalizeRole(role: unknown): "admin" | "staff" {
   const r = String(role ?? "").toLowerCase().trim();
   return r === "admin" ? "admin" : "staff";
@@ -23,8 +31,18 @@ export default function AdminUsersPage() {
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [keyword, setKeyword] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  const [form, setForm] = useState<CreateUserForm>({
+    email: "",
+    password: "",
+    display_name: "",
+    employee_code: "",
+    role: "staff",
+  });
 
   useEffect(() => {
     void init();
@@ -61,29 +79,81 @@ export default function AdminUsersPage() {
         return;
       }
 
-      const { data, error: listError } = await supabase
-        .from("profiles")
-        .select("id, display_name, employee_code, role, created_at")
-        .order("created_at", { ascending: false });
-
-      if (listError) {
-        setError(listError.message);
-        return;
-      }
-
-      setProfiles(
-        (data ?? []).map((p: any) => ({
-          id: p.id,
-          display_name: p.display_name,
-          employee_code: p.employee_code,
-          role: normalizeRole(p.role),
-          created_at: p.created_at,
-        }))
-      );
+      await loadProfiles();
     } catch (e) {
       setError(e instanceof Error ? e.message : "讀取員工資料失敗");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadProfiles() {
+    const { data, error: listError } = await supabase
+      .from("profiles")
+      .select("id, display_name, employee_code, role, created_at")
+      .order("created_at", { ascending: false });
+
+    if (listError) {
+      throw new Error(listError.message);
+    }
+
+    setProfiles(
+      (data ?? []).map((p: any) => ({
+        id: p.id,
+        display_name: p.display_name,
+        employee_code: p.employee_code,
+        role: normalizeRole(p.role),
+        created_at: p.created_at,
+      }))
+    );
+  }
+
+  async function handleCreateUser(e: React.FormEvent) {
+    e.preventDefault();
+    setSubmitting(true);
+    setError("");
+    setSuccess("");
+
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.access_token) {
+        setError("目前登入狀態無效，請重新登入。");
+        return;
+      }
+
+      const res = await fetch("/api/admin/create-user", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify(form),
+      });
+
+      const json = await res.json();
+
+      if (!res.ok) {
+        setError(json.error ?? "建立帳號失敗。");
+        return;
+      }
+
+      setSuccess("帳號建立成功。");
+      setForm({
+        email: "",
+        password: "",
+        display_name: "",
+        employee_code: "",
+        role: "staff",
+      });
+
+      await loadProfiles();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "建立帳號失敗");
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -112,11 +182,128 @@ export default function AdminUsersPage() {
           <div>
             <h1 className="text-2xl font-bold text-slate-900">Admin / 員工總覽</h1>
             <p className="mt-1 text-sm text-slate-600">
-              可查看全部員工，並支援搜尋員工資料與角色辨識。
+              可查看全部員工，並支援搜尋員工資料、角色辨識及新增帳號。
             </p>
           </div>
 
           <PageActionButtons />
+        </div>
+
+        <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+          <h2 className="text-lg font-semibold text-slate-900">新增帳號</h2>
+          <p className="mt-1 text-sm text-slate-500">
+            建立新的 staff 或 admin 帳號，並同步寫入 profiles。
+          </p>
+
+          <form
+            onSubmit={handleCreateUser}
+            className="mt-4 grid gap-4 md:grid-cols-2"
+          >
+            <div>
+              <label className="mb-2 block text-sm font-medium text-slate-700">
+                Email
+              </label>
+              <input
+                type="email"
+                value={form.email}
+                onChange={(e) =>
+                  setForm((prev) => ({ ...prev, email: e.target.value }))
+                }
+                className="w-full rounded-xl border border-slate-300 px-4 py-2 text-sm outline-none focus:border-slate-500"
+                placeholder="例如：staff01@company.com"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="mb-2 block text-sm font-medium text-slate-700">
+                密碼
+              </label>
+              <input
+                type="password"
+                value={form.password}
+                onChange={(e) =>
+                  setForm((prev) => ({ ...prev, password: e.target.value }))
+                }
+                className="w-full rounded-xl border border-slate-300 px-4 py-2 text-sm outline-none focus:border-slate-500"
+                placeholder="至少 6 個字元"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="mb-2 block text-sm font-medium text-slate-700">
+                顯示名稱
+              </label>
+              <input
+                type="text"
+                value={form.display_name}
+                onChange={(e) =>
+                  setForm((prev) => ({ ...prev, display_name: e.target.value }))
+                }
+                className="w-full rounded-xl border border-slate-300 px-4 py-2 text-sm outline-none focus:border-slate-500"
+                placeholder="例如：Chan Tai Man"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="mb-2 block text-sm font-medium text-slate-700">
+                員工編號
+              </label>
+              <input
+                type="text"
+                value={form.employee_code}
+                onChange={(e) =>
+                  setForm((prev) => ({ ...prev, employee_code: e.target.value }))
+                }
+                className="w-full rounded-xl border border-slate-300 px-4 py-2 text-sm outline-none focus:border-slate-500"
+                placeholder="例如：A002"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="mb-2 block text-sm font-medium text-slate-700">
+                角色
+              </label>
+              <select
+                value={form.role}
+                onChange={(e) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    role: normalizeRole(e.target.value),
+                  }))
+                }
+                className="w-full rounded-xl border border-slate-300 px-4 py-2 text-sm outline-none focus:border-slate-500"
+              >
+                <option value="staff">staff</option>
+                <option value="admin">admin</option>
+              </select>
+            </div>
+
+            <div className="flex items-end">
+              <button
+                type="submit"
+                disabled={submitting}
+                className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800 disabled:opacity-50"
+              >
+                {submitting ? "建立中..." : "新增帳號"}
+              </button>
+            </div>
+          </form>
+
+          {success ? (
+            <div className="mt-4 rounded-xl bg-green-50 px-4 py-3 text-sm text-green-700">
+              {success}
+            </div>
+          ) : null}
+
+          {error ? (
+            <div className="mt-4 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">
+              {error}
+            </div>
+          ) : null}
         </div>
 
         <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
@@ -183,12 +370,6 @@ export default function AdminUsersPage() {
               </tbody>
             </table>
           </div>
-
-          {error ? (
-            <div className="mt-4 rounded-xl bg-slate-50 px-4 py-3 text-sm text-red-500">
-              {error}
-            </div>
-          ) : null}
         </div>
       </div>
     </main>
