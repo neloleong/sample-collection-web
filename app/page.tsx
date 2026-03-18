@@ -17,13 +17,19 @@ export default function HomePage() {
   const [displayName, setDisplayName] = useState("");
   const [employeeCode, setEmployeeCode] = useState("");
   const [role, setRole] = useState<"admin" | "staff" | "">("");
+  const [debugMessage, setDebugMessage] = useState("");
 
   const loadUserStatus = async () => {
     setLoading(true);
+    setDebugMessage("");
 
     const {
       data: { user },
+      error: userError,
     } = await supabase.auth.getUser();
+
+    console.log("auth user =", user);
+    console.log("auth userError =", userError);
 
     if (!user) {
       setIsLoggedIn(false);
@@ -31,6 +37,7 @@ export default function HomePage() {
       setDisplayName("");
       setEmployeeCode("");
       setRole("");
+      setDebugMessage("未登入，或未取得 auth user。");
       setLoading(false);
       return;
     }
@@ -43,8 +50,14 @@ export default function HomePage() {
       .eq("id", user.id)
       .maybeSingle();
 
+    console.log("user.id =", user.id);
+    console.log("profileData =", profileData);
+    console.log("profileError =", profileError);
+    console.log("profile role =", profileData?.role);
+
     if (profileError) {
       console.error("讀取 profile 失敗：", profileError.message);
+      setDebugMessage(`讀取 profile 失敗：${profileError.message}`);
     }
 
     const profile = (profileData as Profile | null) ?? null;
@@ -56,6 +69,14 @@ export default function HomePage() {
     setEmployeeCode(profile?.employee_code ?? "-");
     setRole(resolvedRole);
     setIsAdmin(resolvedRole === "admin");
+
+    if (!profile) {
+      setDebugMessage(`找不到 profiles 資料，當前 user.id = ${user.id}`);
+    } else {
+      setDebugMessage(
+        `目前 user.id = ${user.id}，profiles.role = ${profile.role ?? "null"}`
+      );
+    }
 
     setLoading(false);
   };
@@ -99,6 +120,12 @@ export default function HomePage() {
           <p className="mt-3 text-slate-600">
             第一版功能：登入、每日填報 11 個地區類別、查看本月統計。
           </p>
+
+          {debugMessage ? (
+            <div className="mt-4 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-800 ring-1 ring-amber-200">
+              Debug：{debugMessage}
+            </div>
+          ) : null}
 
           {isLoggedIn ? (
             <div className="mt-6 rounded-2xl bg-slate-50 p-5 ring-1 ring-slate-200">
