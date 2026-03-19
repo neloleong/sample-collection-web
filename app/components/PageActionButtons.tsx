@@ -129,6 +129,13 @@ export default function PageActionButtons() {
       </Link>
 
       <Link
+        href="/weekly-rules"
+        className="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100"
+      >
+        每週調分
+      </Link>
+
+      <Link
         href="/"
         className="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100"
       >

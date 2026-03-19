@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabase";
+import PageActionButtons from "../components/PageActionButtons";
+
 
 type RegionCategory = {
   id: number;
@@ -15,174 +17,94 @@ type RegionCategory = {
 type MonthlyRegionRule = {
   region_id: number;
   rule_month: string;
-  basic_score: number | string;
-  extended_score: number | string;
-  balance_score: number | string;
+  quota: number | null;
+  basic_score: number | null;
+  extended_score: number | null;
+  balance_score: number | null;
 };
 
-type WeeklyScoringRule = {
-  id?: number;
-  rule_month: string;
-  week_index: number;
-  week_start_date: string;
-  week_end_date: string;
+type WeeklyMarketStatus = {
   region_id: number;
-  basic_score_override: number | string | null;
-  extended_score_override: number | string | null;
-  balance_score_override: number | string | null;
-  is_active: boolean;
-};
-
-type OverrideFormRow = {
-  basic_score_override: string;
-  extended_score_override: string;
-  balance_score_override: string;
-};
-
-type WeekRange = {
-  week_index: number;
   week_start_date: string;
-  week_end_date: string;
+  status_color: "red" | "yellow" | "green" | "grey" | null;
+  multiplier: number | null;
 };
 
-function formatDate(date: Date) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
+type AdminRow = {
+  region_id: number;
+  sort_order: number;
+  region_name_zh: string;
+  quota: string;
+  basic_score: string;
+  extended_score: string;
+  balance_score: string;
+  weekly_status_color: "" | "red" | "yellow" | "green" | "grey";
+};
 
-function getCurrentMonthValue() {
+function getMonthStart() {
   const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, "0");
-  return `${y}-${m}`;
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  return `${year}-${month}-01`;
 }
 
-function getMonthStartString(monthValue: string) {
-  return `${monthValue}-01`;
+function getWeekStart(dateString?: string) {
+  const date = dateString ? new Date(`${dateString}T00:00:00`) : new Date();
+  const day = date.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  date.setDate(date.getDate() + diff);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const dayText = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${dayText}`;
 }
 
-function buildMonthWeeks(monthValue: string): WeekRange[] {
-  const [yearText, monthText] = monthValue.split("-");
-  const year = Number(yearText);
-  const monthIndex = Number(monthText) - 1;
-
-  const monthStart = new Date(year, monthIndex, 1);
-  const monthEnd = new Date(year, monthIndex + 1, 0);
-
-  const firstSunday = new Date(monthStart);
-  const dow = firstSunday.getDay(); // Sun=0, Mon=1...
-  if (dow !== 0) {
-    firstSunday.setDate(firstSunday.getDate() + (7 - dow));
+function statusToMultiplier(status: "" | "red" | "yellow" | "green" | "grey") {
+  switch (status) {
+    case "red":
+      return 1.4;
+    case "yellow":
+      return 1.2;
+    case "green":
+      return 1;
+    case "grey":
+      return 0;
+    default:
+      return null;
   }
-
-  const weeks: WeekRange[] = [
-    {
-      week_index: 1,
-      week_start_date: formatDate(monthStart),
-      week_end_date: formatDate(firstSunday),
-    },
-  ];
-
-  let nextStart = new Date(firstSunday);
-  nextStart.setDate(nextStart.getDate() + 1);
-
-  let weekIndex = 2;
-
-  while (nextStart <= monthEnd) {
-    const weekStart = new Date(nextStart);
-    const weekEnd = new Date(nextStart);
-    weekEnd.setDate(weekEnd.getDate() + 6);
-
-    if (weekEnd > monthEnd) {
-      weekEnd.setTime(monthEnd.getTime());
-    }
-
-    weeks.push({
-      week_index: weekIndex,
-      week_start_date: formatDate(weekStart),
-      week_end_date: formatDate(weekEnd),
-    });
-
-    nextStart = new Date(weekStart);
-    nextStart.setDate(nextStart.getDate() + 7);
-    weekIndex += 1;
-  }
-
-  return weeks;
 }
 
-export default function WeeklyRulesPage() {
+function multiplierLabel(status: "" | "red" | "yellow" | "green" | "grey") {
+  switch (status) {
+    case "red":
+      return "紅色 1.4";
+    case "yellow":
+      return "黃色 1.2";
+    case "green":
+      return "綠色 1";
+    case "grey":
+      return "灰色 0";
+    default:
+      return "-";
+  }
+}
+
+export default function AdminPage() {
   const router = useRouter();
 
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [savingRules, setSavingRules] = useState(false);
+  const [savingWeekly, setSavingWeekly] = useState(false);
   const [message, setMessage] = useState("");
 
-  const [currentUserId, setCurrentUserId] = useState("");
-  const [currentAdminName, setCurrentAdminName] = useState("");
-
-  const [selectedMonth, setSelectedMonth] = useState(getCurrentMonthValue());
-  const [selectedWeekIndex, setSelectedWeekIndex] = useState<number>(2);
+  const [displayName, setDisplayName] = useState("");
+  const [selectedMonth, setSelectedMonth] = useState(getMonthStart());
+  const [selectedWeekStart, setSelectedWeekStart] = useState(getWeekStart());
 
   const [regions, setRegions] = useState<RegionCategory[]>([]);
-  const [baseRules, setBaseRules] = useState<Map<number, MonthlyRegionRule>>(new Map());
-  const [allOverrides, setAllOverrides] = useState<WeeklyScoringRule[]>([]);
-  const [formValues, setFormValues] = useState<Record<number, OverrideFormRow>>({});
+  const [rows, setRows] = useState<AdminRow[]>([]);
 
-  const weeks = useMemo(() => buildMonthWeeks(selectedMonth), [selectedMonth]);
-  const ruleMonth = getMonthStartString(selectedMonth);
-
-  const selectedWeek = useMemo(() => {
-    return weeks.find((week) => week.week_index === selectedWeekIndex) ?? weeks[0];
-  }, [weeks, selectedWeekIndex]);
-
-  const selectedWeekOverrides = useMemo(() => {
-    return allOverrides.filter((item) => item.week_index === selectedWeekIndex);
-  }, [allOverrides, selectedWeekIndex]);
-
-  const buildEmptyFormValues = (regionList: RegionCategory[]) => {
-    const initial: Record<number, OverrideFormRow> = {};
-    regionList.forEach((region) => {
-      initial[region.id] = {
-        basic_score_override: "",
-        extended_score_override: "",
-        balance_score_override: "",
-      };
-    });
-    return initial;
-  };
-
-  const fillFormFromOverrides = (
-    regionList: RegionCategory[],
-    overrides: WeeklyScoringRule[]
-  ) => {
-    const nextValues = buildEmptyFormValues(regionList);
-
-    overrides.forEach((item) => {
-      nextValues[item.region_id] = {
-        basic_score_override:
-          item.basic_score_override === null || item.basic_score_override === undefined
-            ? ""
-            : String(item.basic_score_override),
-        extended_score_override:
-          item.extended_score_override === null ||
-          item.extended_score_override === undefined
-            ? ""
-            : String(item.extended_score_override),
-        balance_score_override:
-          item.balance_score_override === null ||
-          item.balance_score_override === undefined
-            ? ""
-            : String(item.balance_score_override),
-      };
-    });
-
-    setFormValues(nextValues);
-  };
-
-  const loadPageData = async (monthValue: string) => {
+  const loadPage = async () => {
     setLoading(true);
     setMessage("");
 
@@ -195,27 +117,18 @@ export default function WeeklyRulesPage() {
       return;
     }
 
-    setCurrentUserId(user.id);
-
-    const { data: myProfile, error: myProfileError } = await supabase
+    const { data: profileData } = await supabase
       .from("profiles")
       .select("display_name, role")
       .eq("id", user.id)
       .maybeSingle();
 
-    if (myProfileError) {
-      setMessage(myProfileError.message);
-      setLoading(false);
+    if (profileData?.role !== "admin") {
+      router.replace("/dashboard");
       return;
     }
 
-    if (!myProfile || myProfile.role !== "admin") {
-      setMessage("你不是管理員，無法進入此頁。");
-      setLoading(false);
-      return;
-    }
-
-    setCurrentAdminName(myProfile.display_name ?? user.email ?? "Admin");
+    setDisplayName(profileData?.display_name ?? user.email ?? "Admin");
 
     const { data: regionData, error: regionError } = await supabase
       .from("region_categories")
@@ -228,209 +141,160 @@ export default function WeeklyRulesPage() {
       return;
     }
 
+    const { data: ruleData, error: ruleError } = await supabase
+      .from("monthly_region_rules")
+      .select("region_id, rule_month, quota, basic_score, extended_score, balance_score")
+      .eq("rule_month", selectedMonth);
+
+    if (ruleError) {
+      setMessage(ruleError.message);
+      setLoading(false);
+      return;
+    }
+
+    const { data: weeklyData, error: weeklyError } = await supabase
+      .from("weekly_market_status")
+      .select("region_id, week_start_date, status_color, multiplier")
+      .eq("week_start_date", selectedWeekStart);
+
+    if (weeklyError) {
+      setMessage(weeklyError.message);
+      setLoading(false);
+      return;
+    }
+
     const regionList = (regionData ?? []) as RegionCategory[];
+    const ruleList = (ruleData ?? []) as MonthlyRegionRule[];
+    const weeklyList = (weeklyData ?? []) as WeeklyMarketStatus[];
+
     setRegions(regionList);
 
-    const monthStart = getMonthStartString(monthValue);
-
-    const { data: monthlyRuleData, error: monthlyRuleError } = await supabase
-      .from("monthly_region_rules")
-      .select("region_id, rule_month, basic_score, extended_score, balance_score")
-      .lte("rule_month", monthStart)
-      .order("rule_month", { ascending: false });
-
-    if (monthlyRuleError) {
-      setMessage(monthlyRuleError.message);
-      setLoading(false);
-      return;
-    }
-
-    const latestRuleByRegion = new Map<number, MonthlyRegionRule>();
-    ((monthlyRuleData ?? []) as MonthlyRegionRule[]).forEach((rule) => {
-      if (!latestRuleByRegion.has(rule.region_id)) {
-        latestRuleByRegion.set(rule.region_id, rule);
-      }
+    const ruleMap = new Map<number, MonthlyRegionRule>();
+    ruleList.forEach((item) => {
+      ruleMap.set(item.region_id, item);
     });
 
-    setBaseRules(latestRuleByRegion);
+    const weeklyMap = new Map<number, WeeklyMarketStatus>();
+    weeklyList.forEach((item) => {
+      weeklyMap.set(item.region_id, item);
+    });
 
-    const { data: overrideData, error: overrideError } = await supabase
-      .from("weekly_scoring_rules")
-      .select(
-        "id, rule_month, week_index, week_start_date, week_end_date, region_id, basic_score_override, extended_score_override, balance_score_override, is_active"
-      )
-      .eq("rule_month", monthStart)
-      .order("week_index", { ascending: true })
-      .order("region_id", { ascending: true });
+    const mergedRows: AdminRow[] = regionList.map((region) => {
+      const rule = ruleMap.get(region.id);
+      const weekly = weeklyMap.get(region.id);
 
-    if (overrideError) {
-      setMessage(overrideError.message);
-      setLoading(false);
-      return;
-    }
+      return {
+        region_id: region.id,
+        sort_order: region.sort_order,
+        region_name_zh: region.region_name_zh,
+        quota: rule?.quota != null ? String(rule.quota) : "",
+        basic_score: rule?.basic_score != null ? String(rule.basic_score) : "",
+        extended_score: rule?.extended_score != null ? String(rule.extended_score) : "",
+        balance_score: rule?.balance_score != null ? String(rule.balance_score) : "",
+        weekly_status_color: (weekly?.status_color ?? "") as
+          | ""
+          | "red"
+          | "yellow"
+          | "green"
+          | "grey",
+      };
+    });
 
-    const overrideList = (overrideData ?? []) as WeeklyScoringRule[];
-    setAllOverrides(overrideList);
-
-    const weeksForMonth = buildMonthWeeks(monthValue);
-    const initialWeekIndex = weeksForMonth.length >= 2 ? 2 : 1;
-    setSelectedWeekIndex(initialWeekIndex);
-
-    const firstVisibleOverrides = overrideList.filter(
-      (item) => item.week_index === initialWeekIndex
-    );
-
-    fillFormFromOverrides(regionList, firstVisibleOverrides);
-
+    setRows(mergedRows);
     setLoading(false);
   };
 
   useEffect(() => {
-    loadPageData(selectedMonth);
+    loadPage();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedMonth]);
+  }, [selectedMonth, selectedWeekStart]);
 
-  useEffect(() => {
-    if (regions.length === 0) return;
-    fillFormFromOverrides(regions, selectedWeekOverrides);
-  }, [selectedWeekIndex, allOverrides, regions]);
-
-  const handleInputChange = (
+  const handleRowChange = (
     regionId: number,
-    field: keyof OverrideFormRow,
+    field: keyof Pick<
+      AdminRow,
+      "quota" | "basic_score" | "extended_score" | "balance_score" | "weekly_status_color"
+    >,
     value: string
   ) => {
-    if (value !== "") {
-      const numericValue = Number(value);
-      if (Number.isNaN(numericValue) || numericValue < 0) {
-        return;
-      }
-    }
-
-    setFormValues((prev) => ({
-      ...prev,
-      [regionId]: {
-        ...prev[regionId],
-        [field]: value,
-      },
-    }));
+    setRows((prev) =>
+      prev.map((row) =>
+        row.region_id === regionId
+          ? {
+              ...row,
+              [field]: value,
+            }
+          : row
+      )
+    );
   };
 
-  const handleSave = async () => {
-    if (!currentUserId || !selectedWeek) return;
-
-    if (selectedWeekIndex === 1) {
-      setMessage("第 1 週固定使用原始設定，不可修改。");
-      return;
-    }
-
-    setSaving(true);
+  const handleSaveRules = async () => {
+    setSavingRules(true);
     setMessage("");
 
-    const rowsForWeek = regions.map((region) => {
-      const values = formValues[region.id] ?? {
-        basic_score_override: "",
-        extended_score_override: "",
-        balance_score_override: "",
-      };
-
-      const basic =
-        values.basic_score_override.trim() === ""
-          ? null
-          : Number(values.basic_score_override);
-      const extended =
-        values.extended_score_override.trim() === ""
-          ? null
-          : Number(values.extended_score_override);
-      const balance =
-        values.balance_score_override.trim() === ""
-          ? null
-          : Number(values.balance_score_override);
-
-      return {
-        region_id: region.id,
-        basic_score_override: basic,
-        extended_score_override: extended,
-        balance_score_override: balance,
-      };
-    });
-
-    const toUpsert = rowsForWeek
+    const payload = rows
       .filter(
         (row) =>
-          row.basic_score_override !== null ||
-          row.extended_score_override !== null ||
-          row.balance_score_override !== null
+          row.quota !== "" ||
+          row.basic_score !== "" ||
+          row.extended_score !== "" ||
+          row.balance_score !== ""
       )
       .map((row) => ({
-        rule_month: ruleMonth,
-        week_index: selectedWeekIndex,
-        week_start_date: selectedWeek.week_start_date,
-        week_end_date: selectedWeek.week_end_date,
+        rule_month: selectedMonth,
         region_id: row.region_id,
-        basic_score_override: row.basic_score_override,
-        extended_score_override: row.extended_score_override,
-        balance_score_override: row.balance_score_override,
-        is_active: true,
-        created_by: currentUserId,
+        quota: row.quota === "" ? 0 : Number(row.quota),
+        basic_score: row.basic_score === "" ? 0 : Number(row.basic_score),
+        extended_score: row.extended_score === "" ? 0 : Number(row.extended_score),
+        balance_score: row.balance_score === "" ? 0 : Number(row.balance_score),
       }));
 
-    const toDeleteRegionIds = rowsForWeek
-      .filter(
-        (row) =>
-          row.basic_score_override === null &&
-          row.extended_score_override === null &&
-          row.balance_score_override === null
-      )
-      .map((row) => row.region_id);
+    const { error } = await supabase
+      .from("monthly_region_rules")
+      .upsert(payload, { onConflict: "rule_month,region_id" });
 
-    if (toDeleteRegionIds.length > 0) {
-      const { error: deleteError } = await supabase
-        .from("weekly_scoring_rules")
-        .delete()
-        .eq("rule_month", ruleMonth)
-        .eq("week_index", selectedWeekIndex)
-        .in("region_id", toDeleteRegionIds);
-
-      if (deleteError) {
-        setMessage(deleteError.message);
-        setSaving(false);
-        return;
-      }
-    }
-
-    if (toUpsert.length > 0) {
-      const { error: upsertError } = await supabase
-        .from("weekly_scoring_rules")
-        .upsert(toUpsert, { onConflict: "rule_month,week_index,region_id" });
-
-      if (upsertError) {
-        setMessage(upsertError.message);
-        setSaving(false);
-        return;
-      }
-    }
-
-    const { data: overrideData, error: overrideError } = await supabase
-      .from("weekly_scoring_rules")
-      .select(
-        "id, rule_month, week_index, week_start_date, week_end_date, region_id, basic_score_override, extended_score_override, balance_score_override, is_active"
-      )
-      .eq("rule_month", ruleMonth)
-      .order("week_index", { ascending: true })
-      .order("region_id", { ascending: true });
-
-    if (overrideError) {
-      setMessage(overrideError.message);
-      setSaving(false);
+    if (error) {
+      setMessage(error.message);
+      setSavingRules(false);
       return;
     }
 
-    const overrideList = (overrideData ?? []) as WeeklyScoringRule[];
-    setAllOverrides(overrideList);
-    setMessage("每週調分規則已成功儲存。");
-    setSaving(false);
+    setMessage("本月地區規則已儲存。");
+    setSavingRules(false);
+    await loadPage();
   };
+
+  const handleSaveWeekly = async () => {
+    setSavingWeekly(true);
+    setMessage("");
+
+    const payload = rows
+      .filter((row) => row.weekly_status_color !== "")
+      .map((row) => ({
+        week_start_date: selectedWeekStart,
+        region_id: row.region_id,
+        status_color: row.weekly_status_color,
+        multiplier: statusToMultiplier(row.weekly_status_color),
+        note: null,
+      }));
+
+    const { error } = await supabase
+      .from("weekly_market_status")
+      .upsert(payload, { onConflict: "week_start_date,region_id" });
+
+    if (error) {
+      setMessage(error.message);
+      setSavingWeekly(false);
+      return;
+    }
+
+    setMessage("本週市場調整分數已儲存。");
+    setSavingWeekly(false);
+    await loadPage();
+  };
+
+  const totalRegions = useMemo(() => rows.length, [rows]);
 
   if (loading) {
     return (
@@ -446,34 +310,44 @@ export default function WeeklyRulesPage() {
     <main className="min-h-screen bg-slate-50 px-6 py-10">
       <div className="mx-auto max-w-7xl space-y-6">
         <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <h1 className="text-2xl font-bold text-slate-900">Admin 每週調分</h1>
-              <p className="mt-1 text-sm text-slate-600">管理員：{currentAdminName}</p>
-              <p className="mt-1 text-sm text-slate-500">月份規則：{ruleMonth}</p>
+              <h1 className="text-2xl font-bold text-slate-900">Admin 規則設定</h1>
+              <p className="mt-1 text-sm text-slate-600">管理員：{displayName}</p>
+              <p className="mt-1 text-sm text-slate-500">地區數量：{totalRegions}</p>
             </div>
 
-            <div className="flex flex-wrap gap-3">
-              <Link
-                href="/admin"
-                className="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100"
-              >
-                返回 Admin 總覽
-              </Link>
+            <PageActionButtons />
+          </div>
 
-              <Link
-                href="/dashboard"
-                className="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100"
-              >
-                個人 Dashboard
-              </Link>
+          <div className="mt-6 grid gap-4 md:grid-cols-2">
+            <div>
+              <label className="mb-2 block text-sm font-medium text-slate-700">規則月份</label>
+              <input
+                type="date"
+                value={selectedMonth}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  const monthDate = new Date(`${value}T00:00:00`);
+                  monthDate.setDate(1);
+                  const year = monthDate.getFullYear();
+                  const month = String(monthDate.getMonth() + 1).padStart(2, "0");
+                  setSelectedMonth(`${year}-${month}-01`);
+                }}
+                className="w-full rounded-xl border border-slate-300 px-4 py-2 text-sm outline-none focus:border-slate-500"
+              />
+            </div>
 
-              <Link
-                href="/"
-                className="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100"
-              >
-                首頁
-              </Link>
+            <div>
+              <label className="mb-2 block text-sm font-medium text-slate-700">每星期調整起始日（週一）</label>
+              <input
+                type="date"
+                value={selectedWeekStart}
+                onChange={(e) => {
+                  setSelectedWeekStart(getWeekStart(e.target.value));
+                }}
+                className="w-full rounded-xl border border-slate-300 px-4 py-2 text-sm outline-none focus:border-slate-500"
+              />
             </div>
           </div>
 
@@ -484,182 +358,142 @@ export default function WeeklyRulesPage() {
           ) : null}
         </div>
 
-        <div className="grid gap-4 md:grid-cols-2">
-          <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-            <label className="mb-2 block text-sm font-medium text-slate-700">
-              選擇月份
-            </label>
-            <input
-              type="month"
-              value={selectedMonth}
-              onChange={(e) => setSelectedMonth(e.target.value)}
-              className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
-            />
-          </div>
-
-          <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-            <label className="mb-2 block text-sm font-medium text-slate-700">
-              選擇該月週次
-            </label>
-            <select
-              value={selectedWeekIndex}
-              onChange={(e) => setSelectedWeekIndex(Number(e.target.value))}
-              className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
-            >
-              {weeks.map((week) => (
-                <option key={week.week_index} value={week.week_index}>
-                  第 {week.week_index} 週（{week.week_start_date} ～ {week.week_end_date}）
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-
         <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-          <h2 className="text-lg font-semibold text-slate-900">週次說明</h2>
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <h2 className="text-lg font-semibold text-slate-900">
+              {totalRegions} 個地區類別規則設定
+            </h2>
 
-          <div className="mt-4 grid gap-4 md:grid-cols-3">
-            <div className="rounded-xl bg-slate-50 p-4">
-              <p className="text-sm text-slate-500">目前週次</p>
-              <p className="mt-2 text-xl font-bold text-slate-900">
-                第 {selectedWeek?.week_index ?? "-"} 週
-              </p>
-            </div>
+            <div className="flex flex-wrap gap-3">
+              <button
+                onClick={handleSaveRules}
+                disabled={savingRules}
+                className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800 disabled:opacity-50"
+              >
+                {savingRules ? "儲存中..." : "儲存本月規則"}
+              </button>
 
-            <div className="rounded-xl bg-slate-50 p-4">
-              <p className="text-sm text-slate-500">開始日期</p>
-              <p className="mt-2 text-xl font-bold text-slate-900">
-                {selectedWeek?.week_start_date ?? "-"}
-              </p>
-            </div>
-
-            <div className="rounded-xl bg-slate-50 p-4">
-              <p className="text-sm text-slate-500">結束日期</p>
-              <p className="mt-2 text-xl font-bold text-slate-900">
-                {selectedWeek?.week_end_date ?? "-"}
-              </p>
+              <button
+                onClick={handleSaveWeekly}
+                disabled={savingWeekly}
+                className="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+              >
+                {savingWeekly ? "儲存中..." : "儲存本週調整"}
+              </button>
             </div>
           </div>
 
-          {selectedWeekIndex === 1 ? (
-            <div className="mt-4 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-800 ring-1 ring-amber-200">
-              第 1 週固定使用當月原始設定，不可修改。你可以查看 base rule，但不能儲存 override。
-            </div>
-          ) : (
-            <div className="mt-4 rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
-              第 2 週開始可逐週、逐地區類別調整分數。留空表示沿用當月 base rule。
-            </div>
-          )}
-        </div>
-
-        <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-          <h2 className="text-lg font-semibold text-slate-900">11 個地區類別每週調分</h2>
-
-          <div className="mt-4 overflow-x-auto">
+          <div className="mt-6 overflow-x-auto">
             <table className="min-w-full border-collapse">
               <thead>
-                <tr className="border-b border-slate-200 text-left text-sm text-slate-500">
-                  <th className="px-3 py-3">類別</th>
+                <tr className="border-b border-slate-200 text-left text-sm font-semibold text-slate-600">
+                  <th className="px-3 py-3">序號</th>
                   <th className="px-3 py-3">地區</th>
-                  <th className="px-3 py-3">Base Basic</th>
-                  <th className="px-3 py-3">Base Extended</th>
-                  <th className="px-3 py-3">Base Balance</th>
-                  <th className="px-3 py-3">Override Basic</th>
-                  <th className="px-3 py-3">Override Extended</th>
-                  <th className="px-3 py-3">Override Balance</th>
+                  <th className="px-3 py-3">建議配額</th>
+                  <th className="px-3 py-3">基本分數</th>
+                  <th className="px-3 py-3">延伸分數</th>
+                  <th className="px-3 py-3">平衡分數</th>
+                  <th className="px-3 py-3">每星期調整分數</th>
                 </tr>
               </thead>
               <tbody>
-                {regions.map((region) => {
-                  const baseRule = baseRules.get(region.id);
-                  const row = formValues[region.id] ?? {
-                    basic_score_override: "",
-                    extended_score_override: "",
-                    balance_score_override: "",
-                  };
+                {rows.map((row) => (
+                  <tr key={row.region_id} className="border-b border-slate-100 text-sm">
+                    <td className="px-3 py-3">{row.sort_order}</td>
+                    <td className="px-3 py-3">{row.region_name_zh}</td>
 
-                  return (
-                    <tr key={region.id} className="border-b border-slate-100 text-sm">
-                      <td className="px-3 py-3">{region.id}</td>
-                      <td className="px-3 py-3">{region.region_name_zh}</td>
-                      <td className="px-3 py-3">
-                        {baseRule ? String(baseRule.basic_score) : "-"}
-                      </td>
-                      <td className="px-3 py-3">
-                        {baseRule ? String(baseRule.extended_score) : "-"}
-                      </td>
-                      <td className="px-3 py-3">
-                        {baseRule ? String(baseRule.balance_score) : "-"}
-                      </td>
-                      <td className="px-3 py-3">
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          disabled={selectedWeekIndex === 1}
-                          value={row.basic_score_override}
+                    <td className="px-3 py-3">
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        placeholder="留空待填"
+                        value={row.quota}
+                        onChange={(e) => handleRowChange(row.region_id, "quota", e.target.value)}
+                        className="w-28 rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                      />
+                    </td>
+
+                    <td className="px-3 py-3">
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="留空待填"
+                        value={row.basic_score}
+                        onChange={(e) =>
+                          handleRowChange(row.region_id, "basic_score", e.target.value)
+                        }
+                        className="w-28 rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                      />
+                    </td>
+
+                    <td className="px-3 py-3">
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="留空待填"
+                        value={row.extended_score}
+                        onChange={(e) =>
+                          handleRowChange(row.region_id, "extended_score", e.target.value)
+                        }
+                        className="w-28 rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                      />
+                    </td>
+
+                    <td className="px-3 py-3">
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="留空待填"
+                        value={row.balance_score}
+                        onChange={(e) =>
+                          handleRowChange(row.region_id, "balance_score", e.target.value)
+                        }
+                        className="w-28 rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                      />
+                    </td>
+
+                    <td className="px-3 py-3">
+                      <div className="flex flex-col gap-2">
+                        <select
+                          value={row.weekly_status_color}
                           onChange={(e) =>
-                            handleInputChange(
-                              region.id,
-                              "basic_score_override",
-                              e.target.value
+                            handleRowChange(
+                              row.region_id,
+                              "weekly_status_color",
+                              e.target.value as "" | "red" | "yellow" | "green" | "grey"
                             )
                           }
-                          className="w-32 rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500 disabled:bg-slate-100"
-                          placeholder="留空沿用"
-                        />
-                      </td>
-                      <td className="px-3 py-3">
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          disabled={selectedWeekIndex === 1}
-                          value={row.extended_score_override}
-                          onChange={(e) =>
-                            handleInputChange(
-                              region.id,
-                              "extended_score_override",
-                              e.target.value
-                            )
-                          }
-                          className="w-32 rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500 disabled:bg-slate-100"
-                          placeholder="留空沿用"
-                        />
-                      </td>
-                      <td className="px-3 py-3">
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          disabled={selectedWeekIndex === 1}
-                          value={row.balance_score_override}
-                          onChange={(e) =>
-                            handleInputChange(
-                              region.id,
-                              "balance_score_override",
-                              e.target.value
-                            )
-                          }
-                          className="w-32 rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500 disabled:bg-slate-100"
-                          placeholder="留空沿用"
-                        />
-                      </td>
-                    </tr>
-                  );
-                })}
+                          className="w-40 rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                        >
+                          <option value="">留空待用</option>
+                          <option value="red">紅色：1.4</option>
+                          <option value="yellow">黃色：1.2</option>
+                          <option value="green">綠色：1</option>
+                          <option value="grey">灰色：0</option>
+                        </select>
+
+                        <span className="text-xs text-slate-500">
+                          目前：{multiplierLabel(row.weekly_status_color)}
+                        </span>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
 
-          <div className="mt-6 flex gap-3">
-            <button
-              onClick={handleSave}
-              disabled={saving || selectedWeekIndex === 1}
-              className="rounded-xl bg-slate-900 px-6 py-3 font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-            >
-              {saving ? "儲存中..." : "儲存本週規則"}
-            </button>
+          <div className="mt-6 rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
+            <p>計分規則說明：</p>
+            <p className="mt-2">1. 基本分數：累計完成率 ≤ 100%</p>
+            <p>2. 延伸分數：累計完成率 &gt; 100% 且 ≤ 130%</p>
+            <p>3. 平衡分數：累計完成率 &gt; 130%</p>
+            <p>4. 配額統計口徑：全公司在該月該地區的累計份數</p>
+            <p>5. 每星期調整分數：最終單份分數 = 階段分數 × 每週 multiplier</p>
           </div>
         </div>
       </div>
