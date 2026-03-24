@@ -1,27 +1,43 @@
 export default function HomePage() {
   return (
-    <main className="min-h-screen bg-white px-6 py-12">
-      <div className="mx-auto max-w-3xl space-y-6">
-        <h1 className="text-3xl font-bold">
-          Sample Collection Management System
+    <main className="min-h-screen bg-gray-50 flex flex-col items-center justify-center px-6">
+
+      {/* Title */}
+      <div className="text-center max-w-2xl">
+        <h1 className="text-4xl font-bold text-gray-900 mb-4">
+          樣本收集管理系統
         </h1>
 
-        <p>
-          This platform is designed to manage and analyze sample collection data across multiple regions.
+        <p className="text-lg text-gray-600 mb-6">
+          用於跨地區樣本收集數據的統一管理與分析平台
         </p>
 
-        <p>
-          Users can input daily records, track performance, and evaluate monthly results through structured dashboards.
+        <p className="text-gray-500 leading-relaxed mb-10">
+          本平台協助團隊高效記錄每日數據、追蹤表現，並透過儀表板分析結果。
+          支援多地區管理、權限控制及績效監察，讓決策更清晰。
         </p>
 
-        <p>
-          The system supports multi-region data tracking, role-based access, and performance monitoring.
-        </p>
+        {/* Buttons */}
+        <div className="flex justify-center gap-4">
+          <a
+            href="/login"
+            className="px-6 py-3 bg-blue-600 text-white rounded-lg shadow hover:bg-blue-700 transition"
+          >
+            登入系統
+          </a>
 
-        <div className="pt-6 flex gap-4">
-          <a href="/login">Login</a>
-          <a href="/dashboard">View Dashboard</a>
+          <a
+            href="/dashboard"
+            className="px-6 py-3 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 transition"
+          >
+            查看儀表板
+          </a>
         </div>
+      </div>
+
+      {/* Footer hint */}
+      <div className="mt-16 text-sm text-gray-400">
+        © 2026 Sample Collection System
       </div>
     </main>
   );
