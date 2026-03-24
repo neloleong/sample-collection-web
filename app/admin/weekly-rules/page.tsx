@@ -1,11 +1,9 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "../../lib/supabase";
-import PageActionButtons from "../components/PageActionButtons";
-
+import { supabase } from "../../../lib/supabase";
+import PageActionButtons from "@/app/components/PageActionButtons";
 
 type RegionCategory = {
   id: number;
@@ -30,7 +28,7 @@ type WeeklyMarketStatus = {
   multiplier: number | null;
 };
 
-type AdminRow = {
+type RuleRow = {
   region_id: number;
   sort_order: number;
   region_name_zh: string;
@@ -38,6 +36,12 @@ type AdminRow = {
   basic_score: string;
   extended_score: string;
   balance_score: string;
+};
+
+type WeeklyRow = {
+  region_id: number;
+  sort_order: number;
+  region_name_zh: string;
   weekly_status_color: "" | "red" | "yellow" | "green" | "grey";
 };
 
@@ -89,7 +93,7 @@ function multiplierLabel(status: "" | "red" | "yellow" | "green" | "grey") {
   }
 }
 
-export default function AdminPage() {
+export default function AdminWeeklyRulesPage() {
   const router = useRouter();
 
   const [loading, setLoading] = useState(true);
@@ -102,19 +106,19 @@ export default function AdminPage() {
   const [selectedWeekStart, setSelectedWeekStart] = useState(getWeekStart());
 
   const [regions, setRegions] = useState<RegionCategory[]>([]);
-  const [rows, setRows] = useState<AdminRow[]>([]);
+  const [ruleRows, setRuleRows] = useState<RuleRow[]>([]);
+  const [weeklyRows, setWeeklyRows] = useState<WeeklyRow[]>([]);
 
-  const loadPage = async () => {
-    setLoading(true);
-    setMessage("");
+  const totalRegions = useMemo(() => regions.length, [regions]);
 
+  const loadBase = async () => {
     const {
       data: { user },
     } = await supabase.auth.getUser();
 
     if (!user) {
       router.replace("/login");
-      return;
+      return false;
     }
 
     const { data: profileData } = await supabase
@@ -125,7 +129,7 @@ export default function AdminPage() {
 
     if (profileData?.role !== "admin") {
       router.replace("/dashboard");
-      return;
+      return false;
     }
 
     setDisplayName(profileData?.display_name ?? user.email ?? "Admin");
@@ -137,20 +141,55 @@ export default function AdminPage() {
 
     if (regionError) {
       setMessage(regionError.message);
-      setLoading(false);
-      return;
+      return false;
     }
+
+    setRegions((regionData ?? []) as RegionCategory[]);
+    return (regionData ?? []) as RegionCategory[];
+  };
+
+  const loadMonthlyRules = async (regionList?: RegionCategory[]) => {
+    const effectiveRegions = regionList ?? regions;
 
     const { data: ruleData, error: ruleError } = await supabase
       .from("monthly_region_rules")
-      .select("region_id, rule_month, quota, basic_score, extended_score, balance_score")
+      .select(
+        "region_id, rule_month, quota, basic_score, extended_score, balance_score"
+      )
       .eq("rule_month", selectedMonth);
 
     if (ruleError) {
       setMessage(ruleError.message);
-      setLoading(false);
       return;
     }
+
+    const ruleList = (ruleData ?? []) as MonthlyRegionRule[];
+    const ruleMap = new Map<number, MonthlyRegionRule>();
+    ruleList.forEach((item) => {
+      ruleMap.set(item.region_id, item);
+    });
+
+    const nextRuleRows: RuleRow[] = effectiveRegions.map((region) => {
+      const rule = ruleMap.get(region.id);
+
+      return {
+        region_id: region.id,
+        sort_order: region.sort_order,
+        region_name_zh: region.region_name_zh,
+        quota: rule?.quota != null ? String(rule.quota) : "",
+        basic_score: rule?.basic_score != null ? String(rule.basic_score) : "",
+        extended_score:
+          rule?.extended_score != null ? String(rule.extended_score) : "",
+        balance_score:
+          rule?.balance_score != null ? String(rule.balance_score) : "",
+      };
+    });
+
+    setRuleRows(nextRuleRows);
+  };
+
+  const loadWeeklyRules = async (regionList?: RegionCategory[]) => {
+    const effectiveRegions = regionList ?? regions;
 
     const { data: weeklyData, error: weeklyError } = await supabase
       .from("weekly_market_status")
@@ -159,38 +198,22 @@ export default function AdminPage() {
 
     if (weeklyError) {
       setMessage(weeklyError.message);
-      setLoading(false);
       return;
     }
 
-    const regionList = (regionData ?? []) as RegionCategory[];
-    const ruleList = (ruleData ?? []) as MonthlyRegionRule[];
     const weeklyList = (weeklyData ?? []) as WeeklyMarketStatus[];
-
-    setRegions(regionList);
-
-    const ruleMap = new Map<number, MonthlyRegionRule>();
-    ruleList.forEach((item) => {
-      ruleMap.set(item.region_id, item);
-    });
-
     const weeklyMap = new Map<number, WeeklyMarketStatus>();
     weeklyList.forEach((item) => {
       weeklyMap.set(item.region_id, item);
     });
 
-    const mergedRows: AdminRow[] = regionList.map((region) => {
-      const rule = ruleMap.get(region.id);
+    const nextWeeklyRows: WeeklyRow[] = effectiveRegions.map((region) => {
       const weekly = weeklyMap.get(region.id);
 
       return {
         region_id: region.id,
         sort_order: region.sort_order,
         region_name_zh: region.region_name_zh,
-        quota: rule?.quota != null ? String(rule.quota) : "",
-        basic_score: rule?.basic_score != null ? String(rule.basic_score) : "",
-        extended_score: rule?.extended_score != null ? String(rule.extended_score) : "",
-        balance_score: rule?.balance_score != null ? String(rule.balance_score) : "",
         weekly_status_color: (weekly?.status_color ?? "") as
           | ""
           | "red"
@@ -200,24 +223,41 @@ export default function AdminPage() {
       };
     });
 
-    setRows(mergedRows);
+    setWeeklyRows(nextWeeklyRows);
+  };
+
+  const loadPage = async () => {
+    setLoading(true);
+    setMessage("");
+
+    const regionList = await loadBase();
+    if (!regionList) {
+      setLoading(false);
+      return;
+    }
+
+    await Promise.all([
+      loadMonthlyRules(regionList),
+      loadWeeklyRules(regionList),
+    ]);
+
     setLoading(false);
   };
 
   useEffect(() => {
-    loadPage();
+    void loadPage();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedMonth, selectedWeekStart]);
 
-  const handleRowChange = (
+  const handleRuleRowChange = (
     regionId: number,
     field: keyof Pick<
-      AdminRow,
-      "quota" | "basic_score" | "extended_score" | "balance_score" | "weekly_status_color"
+      RuleRow,
+      "quota" | "basic_score" | "extended_score" | "balance_score"
     >,
     value: string
   ) => {
-    setRows((prev) =>
+    setRuleRows((prev) =>
       prev.map((row) =>
         row.region_id === regionId
           ? {
@@ -229,11 +269,27 @@ export default function AdminPage() {
     );
   };
 
+  const handleWeeklyRowChange = (
+    regionId: number,
+    value: "" | "red" | "yellow" | "green" | "grey"
+  ) => {
+    setWeeklyRows((prev) =>
+      prev.map((row) =>
+        row.region_id === regionId
+          ? {
+              ...row,
+              weekly_status_color: value,
+            }
+          : row
+      )
+    );
+  };
+
   const handleSaveRules = async () => {
     setSavingRules(true);
     setMessage("");
 
-    const payload = rows
+    const payload = ruleRows
       .filter(
         (row) =>
           row.quota !== "" ||
@@ -246,8 +302,10 @@ export default function AdminPage() {
         region_id: row.region_id,
         quota: row.quota === "" ? 0 : Number(row.quota),
         basic_score: row.basic_score === "" ? 0 : Number(row.basic_score),
-        extended_score: row.extended_score === "" ? 0 : Number(row.extended_score),
-        balance_score: row.balance_score === "" ? 0 : Number(row.balance_score),
+        extended_score:
+          row.extended_score === "" ? 0 : Number(row.extended_score),
+        balance_score:
+          row.balance_score === "" ? 0 : Number(row.balance_score),
       }));
 
     const { error } = await supabase
@@ -262,14 +320,16 @@ export default function AdminPage() {
 
     setMessage("本月地區規則已儲存。");
     setSavingRules(false);
-    await loadPage();
+
+    // 只重載本月規則，不碰本週調整未儲存內容
+    await loadMonthlyRules();
   };
 
   const handleSaveWeekly = async () => {
     setSavingWeekly(true);
     setMessage("");
 
-    const payload = rows
+    const payload = weeklyRows
       .filter((row) => row.weekly_status_color !== "")
       .map((row) => ({
         week_start_date: selectedWeekStart,
@@ -291,10 +351,10 @@ export default function AdminPage() {
 
     setMessage("本週市場調整分數已儲存。");
     setSavingWeekly(false);
-    await loadPage();
-  };
 
-  const totalRegions = useMemo(() => rows.length, [rows]);
+    // 只重載本週調整，不碰本月規則未儲存內容
+    await loadWeeklyRules();
+  };
 
   if (loading) {
     return (
@@ -322,7 +382,9 @@ export default function AdminPage() {
 
           <div className="mt-6 grid gap-4 md:grid-cols-2">
             <div>
-              <label className="mb-2 block text-sm font-medium text-slate-700">規則月份</label>
+              <label className="mb-2 block text-sm font-medium text-slate-700">
+                規則月份
+              </label>
               <input
                 type="date"
                 value={selectedMonth}
@@ -339,7 +401,9 @@ export default function AdminPage() {
             </div>
 
             <div>
-              <label className="mb-2 block text-sm font-medium text-slate-700">每星期調整起始日（週一）</label>
+              <label className="mb-2 block text-sm font-medium text-slate-700">
+                每星期調整起始日（週一）
+              </label>
               <input
                 type="date"
                 value={selectedWeekStart}
@@ -366,6 +430,7 @@ export default function AdminPage() {
 
             <div className="flex flex-wrap gap-3">
               <button
+                type="button"
                 onClick={handleSaveRules}
                 disabled={savingRules}
                 className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800 disabled:opacity-50"
@@ -374,6 +439,7 @@ export default function AdminPage() {
               </button>
 
               <button
+                type="button"
                 onClick={handleSaveWeekly}
                 disabled={savingWeekly}
                 className="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 disabled:opacity-50"
@@ -397,92 +463,107 @@ export default function AdminPage() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row) => (
-                  <tr key={row.region_id} className="border-b border-slate-100 text-sm">
-                    <td className="px-3 py-3">{row.sort_order}</td>
-                    <td className="px-3 py-3">{row.region_name_zh}</td>
+                {regions.map((region) => {
+                  const ruleRow = ruleRows.find((r) => r.region_id === region.id);
+                  const weeklyRow = weeklyRows.find((w) => w.region_id === region.id);
 
-                    <td className="px-3 py-3">
-                      <input
-                        type="number"
-                        min="0"
-                        step="1"
-                        placeholder="留空待填"
-                        value={row.quota}
-                        onChange={(e) => handleRowChange(row.region_id, "quota", e.target.value)}
-                        className="w-28 rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
-                      />
-                    </td>
+                  return (
+                    <tr key={region.id} className="border-b border-slate-100 text-sm">
+                      <td className="px-3 py-3">{region.sort_order}</td>
+                      <td className="px-3 py-3">{region.region_name_zh}</td>
 
-                    <td className="px-3 py-3">
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        placeholder="留空待填"
-                        value={row.basic_score}
-                        onChange={(e) =>
-                          handleRowChange(row.region_id, "basic_score", e.target.value)
-                        }
-                        className="w-28 rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
-                      />
-                    </td>
-
-                    <td className="px-3 py-3">
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        placeholder="留空待填"
-                        value={row.extended_score}
-                        onChange={(e) =>
-                          handleRowChange(row.region_id, "extended_score", e.target.value)
-                        }
-                        className="w-28 rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
-                      />
-                    </td>
-
-                    <td className="px-3 py-3">
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        placeholder="留空待填"
-                        value={row.balance_score}
-                        onChange={(e) =>
-                          handleRowChange(row.region_id, "balance_score", e.target.value)
-                        }
-                        className="w-28 rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
-                      />
-                    </td>
-
-                    <td className="px-3 py-3">
-                      <div className="flex flex-col gap-2">
-                        <select
-                          value={row.weekly_status_color}
+                      <td className="px-3 py-3">
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          placeholder="留空待填"
+                          value={ruleRow?.quota ?? ""}
                           onChange={(e) =>
-                            handleRowChange(
-                              row.region_id,
-                              "weekly_status_color",
-                              e.target.value as "" | "red" | "yellow" | "green" | "grey"
+                            handleRuleRowChange(region.id, "quota", e.target.value)
+                          }
+                          className="w-28 rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                        />
+                      </td>
+
+                      <td className="px-3 py-3">
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          placeholder="留空待填"
+                          value={ruleRow?.basic_score ?? ""}
+                          onChange={(e) =>
+                            handleRuleRowChange(region.id, "basic_score", e.target.value)
+                          }
+                          className="w-28 rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                        />
+                      </td>
+
+                      <td className="px-3 py-3">
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          placeholder="留空待填"
+                          value={ruleRow?.extended_score ?? ""}
+                          onChange={(e) =>
+                            handleRuleRowChange(
+                              region.id,
+                              "extended_score",
+                              e.target.value
                             )
                           }
-                          className="w-40 rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
-                        >
-                          <option value="">留空待用</option>
-                          <option value="red">紅色：1.4</option>
-                          <option value="yellow">黃色：1.2</option>
-                          <option value="green">綠色：1</option>
-                          <option value="grey">灰色：0</option>
-                        </select>
+                          className="w-28 rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                        />
+                      </td>
 
-                        <span className="text-xs text-slate-500">
-                          目前：{multiplierLabel(row.weekly_status_color)}
-                        </span>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                      <td className="px-3 py-3">
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          placeholder="留空待填"
+                          value={ruleRow?.balance_score ?? ""}
+                          onChange={(e) =>
+                            handleRuleRowChange(region.id, "balance_score", e.target.value)
+                          }
+                          className="w-28 rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                        />
+                      </td>
+
+                      <td className="px-3 py-3">
+                        <div className="flex flex-col gap-2">
+                          <select
+                            value={weeklyRow?.weekly_status_color ?? ""}
+                            onChange={(e) =>
+                              handleWeeklyRowChange(
+                                region.id,
+                                e.target.value as
+                                  | ""
+                                  | "red"
+                                  | "yellow"
+                                  | "green"
+                                  | "grey"
+                              )
+                            }
+                            className="w-40 rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                          >
+                            <option value="">留空待用</option>
+                            <option value="red">紅色：1.4</option>
+                            <option value="yellow">黃色：1.2</option>
+                            <option value="green">綠色：1</option>
+                            <option value="grey">灰色：0</option>
+                          </select>
+
+                          <span className="text-xs text-slate-500">
+                            目前：{multiplierLabel(weeklyRow?.weekly_status_color ?? "")}
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -494,6 +575,7 @@ export default function AdminPage() {
             <p>3. 平衡分數：累計完成率 &gt; 130%</p>
             <p>4. 配額統計口徑：全公司在該月該地區的累計份數</p>
             <p>5. 每星期調整分數：最終單份分數 = 階段分數 × 每週 multiplier</p>
+            <p>6. 「儲存本月規則」與「儲存本週調整」互相獨立，不會覆蓋對方未儲存的修改。</p>
           </div>
         </div>
       </div>

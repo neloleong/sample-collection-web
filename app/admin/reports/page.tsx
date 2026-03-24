@@ -18,13 +18,7 @@ type Profile = {
   display_name: string | null;
   employee_code: string | null;
   role: "admin" | "staff";
-};
-
-type RegionCategory = {
-  id: number;
-  region_name_zh: string;
-  sort_order: number;
-  is_non_mainland: boolean;
+  created_at?: string | null;
 };
 
 type DailyEntry = {
@@ -36,9 +30,42 @@ type DailyEntry = {
   created_at: string;
 };
 
-type ReportRow = DailyEntry & {
-  profile: Profile | null;
-  region: RegionCategory | null;
+type RegionCategory = {
+  id: number;
+  region_name_zh: string;
+  sort_order: number;
+  is_non_mainland: boolean;
+};
+
+type MonthlyRegionRule = {
+  region_id: number;
+  rule_month: string;
+  quota: number | null;
+  basic_score: number | null;
+  extended_score: number | null;
+  balance_score: number | null;
+};
+
+type WeeklyMarketStatus = {
+  id: number;
+  week_start_date: string;
+  region_id: number;
+  status_color: "red" | "yellow" | "green" | "grey";
+  multiplier: number;
+};
+
+type EmployeeSummaryRow = {
+  id: string;
+  display_name: string | null;
+  employee_code: string | null;
+  role: "admin" | "staff";
+  created_at: string | null;
+  total_quantity: number;
+  non_mainland_qty: number;
+  raw_score: number;
+  adjusted_score: number;
+  last_entry_date: string | null;
+  achievement_status: "達標" | "未達標" | "未填報";
 };
 
 function normalizeRole(role: unknown): "admin" | "staff" {
@@ -53,10 +80,158 @@ function formatDate(value: string | null) {
   return date.toLocaleDateString("zh-HK");
 }
 
-function formatDateTime(value: string) {
+function formatDateTime(value: string | null) {
+  if (!value) return "-";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString("zh-HK");
+}
+
+function round2(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function getWeekStartDateString(dateString: string) {
+  const date = new Date(`${dateString}T00:00:00`);
+  const day = date.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  date.setDate(date.getDate() + diff);
+
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const dayOfMonth = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${dayOfMonth}`;
+}
+
+function buildWeeklyMultiplierMap(statuses: WeeklyMarketStatus[]) {
+  const map = new Map<string, number>();
+
+  statuses.forEach((row) => {
+    map.set(
+      `${row.week_start_date}__${row.region_id}`,
+      Number(row.multiplier ?? 1)
+    );
+  });
+
+  return map;
+}
+
+function computeEmployeeSummary(params: {
+  profile: Profile;
+  entries: DailyEntry[];
+  regions: RegionCategory[];
+  monthlyRules: MonthlyRegionRule[];
+  weeklyStatuses: WeeklyMarketStatus[];
+}): EmployeeSummaryRow {
+  const { profile, entries, regions, monthlyRules, weeklyStatuses } = params;
+
+  const regionMap = new Map<number, RegionCategory>();
+  regions.forEach((region) => regionMap.set(region.id, region));
+
+  const ruleMap = new Map<number, MonthlyRegionRule>();
+  monthlyRules.forEach((rule) => ruleMap.set(rule.region_id, rule));
+
+  const weeklyMultiplierMap = buildWeeklyMultiplierMap(weeklyStatuses);
+
+  const sortedEntries = [...entries].sort((a, b) => {
+    if (a.entry_date !== b.entry_date) {
+      return a.entry_date.localeCompare(b.entry_date);
+    }
+    return a.id - b.id;
+  });
+
+  const runningQtyByRegion = new Map<number, number>();
+  const totalByRegion = new Map<number, number>();
+
+  let totalQuantity = 0;
+  let nonMainlandQty = 0;
+  let rawScore = 0;
+  let adjustedScore = 0;
+  let lastEntryDate: string | null = null;
+
+  for (const entry of sortedEntries) {
+    const qty = Number(entry.quantity ?? 0);
+    if (qty <= 0) continue;
+
+    totalQuantity += qty;
+
+    if (!lastEntryDate || entry.entry_date > lastEntryDate) {
+      lastEntryDate = entry.entry_date;
+    }
+
+    const region = regionMap.get(entry.region_id);
+    if (region?.is_non_mainland) {
+      nonMainlandQty += qty;
+    }
+
+    const rule = ruleMap.get(entry.region_id);
+    const quota = Math.max(Number(rule?.quota ?? 0), 0);
+    const basicScore = Number(rule?.basic_score ?? 0);
+    const extendedScore = Number(rule?.extended_score ?? basicScore);
+
+    const beforeQty = runningQtyByRegion.get(entry.region_id) ?? 0;
+
+    let basicQty = 0;
+    let extendedQty = 0;
+
+    if (quota > 0) {
+      const remainBasicQuota = Math.max(quota - beforeQty, 0);
+      basicQty = Math.min(qty, remainBasicQuota);
+      extendedQty = Math.max(qty - basicQty, 0);
+    } else {
+      basicQty = qty;
+      extendedQty = 0;
+    }
+
+    const entryRawScore = basicQty * basicScore + extendedQty * extendedScore;
+    const weekStart = getWeekStartDateString(entry.entry_date);
+    const multiplier =
+      weeklyMultiplierMap.get(`${weekStart}__${entry.region_id}`) ?? 1;
+
+    rawScore += entryRawScore;
+    adjustedScore += entryRawScore * Number(multiplier);
+
+    runningQtyByRegion.set(entry.region_id, beforeQty + qty);
+    totalByRegion.set(
+      entry.region_id,
+      (totalByRegion.get(entry.region_id) ?? 0) + qty
+    );
+  }
+
+  for (const region of regions) {
+    const total = totalByRegion.get(region.id) ?? 0;
+    const rule = ruleMap.get(region.id);
+
+    const quota = Math.max(Number(rule?.quota ?? 0), 0);
+    const balanceScore = Number(rule?.balance_score ?? 0);
+
+    if (total > 0 && quota > 0 && total < quota && balanceScore !== 0) {
+      rawScore += balanceScore;
+      adjustedScore += balanceScore;
+    }
+  }
+
+  const achievementStatus: "達標" | "未達標" | "未填報" =
+    totalQuantity <= 0
+      ? "未填報"
+      : totalQuantity >= 400 && nonMainlandQty >= 100 && adjustedScore >= 420
+      ? "達標"
+      : "未達標";
+
+  return {
+    id: profile.id,
+    display_name: profile.display_name,
+    employee_code: profile.employee_code,
+    role: profile.role,
+    created_at: profile.created_at ?? null,
+    total_quantity: totalQuantity,
+    non_mainland_qty: nonMainlandQty,
+    raw_score: round2(rawScore),
+    adjusted_score: round2(adjustedScore),
+    last_entry_date: lastEntryDate,
+    achievement_status: achievementStatus,
+  };
 }
 
 export default function AdminReportsPage() {
@@ -70,10 +245,13 @@ export default function AdminReportsPage() {
   const [displayName, setDisplayName] = useState("");
 
   const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [regions, setRegions] = useState<RegionCategory[]>([]);
   const [entries, setEntries] = useState<DailyEntry[]>([]);
+  const [regions, setRegions] = useState<RegionCategory[]>([]);
+  const [monthlyRules, setMonthlyRules] = useState<MonthlyRegionRule[]>([]);
+  const [weeklyStatuses, setWeeklyStatuses] = useState<WeeklyMarketStatus[]>([]);
 
   const [selectedUserId, setSelectedUserId] = useState("all");
+  const [achievementFilter, setAchievementFilter] = useState("all");
   const [keyword, setKeyword] = useState("");
 
   const [selectedYear, setSelectedYear] = useState<number>(currentYear);
@@ -125,51 +303,84 @@ export default function AdminReportsPage() {
 
       setDisplayName(profileData?.display_name || user.email || "Admin");
 
-      const { data: profilesData, error: profilesError } = await supabase
-        .from("profiles")
-        .select("id, display_name, employee_code, role")
-        .order("created_at", { ascending: false });
+      const [
+        profilesResult,
+        entriesResult,
+        regionsResult,
+        rulesResult,
+        weeklyResult,
+      ] = await Promise.all([
+        supabase
+          .from("profiles")
+          .select("id, display_name, employee_code, role, created_at")
+          .order("created_at", { ascending: false }),
 
-      if (profilesError) {
-        setError(profilesError.message);
+        supabase
+          .from("daily_entries")
+          .select("id, user_id, entry_date, region_id, quantity, created_at")
+          .gte("entry_date", monthStart)
+          .lt("entry_date", nextMonthStart)
+          .order("created_at", { ascending: false }),
+
+        supabase
+          .from("region_categories")
+          .select("id, region_name_zh, sort_order, is_non_mainland")
+          .order("sort_order", { ascending: true }),
+
+        supabase
+          .from("monthly_region_rules")
+          .select(
+            "region_id, rule_month, quota, basic_score, extended_score, balance_score"
+          )
+          .eq("rule_month", monthStart)
+          .order("region_id", { ascending: true }),
+
+        supabase
+          .from("weekly_market_status")
+          .select("id, week_start_date, region_id, status_color, multiplier")
+          .gte("week_start_date", monthStart)
+          .lt("week_start_date", nextMonthStart)
+          .order("week_start_date", { ascending: true })
+          .order("region_id", { ascending: true }),
+      ]);
+
+      if (profilesResult.error) {
+        setError(profilesResult.error.message);
         return;
       }
 
-      const { data: regionData, error: regionError } = await supabase
-        .from("region_categories")
-        .select("id, region_name_zh, sort_order, is_non_mainland")
-        .order("sort_order", { ascending: true });
-
-      if (regionError) {
-        setError(regionError.message);
+      if (entriesResult.error) {
+        setError(entriesResult.error.message);
         return;
       }
 
-      const { data: entryData, error: entryError } = await supabase
-        .from("daily_entries")
-        .select("id, user_id, entry_date, region_id, quantity, created_at")
-        .gte("entry_date", monthStart)
-        .lt("entry_date", nextMonthStart)
-        .order("created_at", { ascending: false });
+      if (regionsResult.error) {
+        setError(regionsResult.error.message);
+        return;
+      }
 
-      if (entryError) {
-        setError(entryError.message);
+      if (rulesResult.error) {
+        setError(rulesResult.error.message);
+        return;
+      }
+
+      if (weeklyResult.error) {
+        setError(weeklyResult.error.message);
         return;
       }
 
       setProfiles(
-        (profilesData ?? []).map((p: any) => ({
+        (profilesResult.data ?? []).map((p: any) => ({
           id: p.id,
           display_name: p.display_name,
           employee_code: p.employee_code,
           role: normalizeRole(p.role),
+          created_at: p.created_at ?? null,
         }))
       );
 
-      setRegions((regionData ?? []) as RegionCategory[]);
-
       setEntries(
-        (entryData ?? []).map((row: any) => ({
+        (entriesResult.data ?? []).map((row: any) => ({
           id: row.id,
           user_id: row.user_id,
           entry_date: row.entry_date,
@@ -179,54 +390,65 @@ export default function AdminReportsPage() {
         }))
       );
 
+      setRegions((regionsResult.data ?? []) as RegionCategory[]);
+      setMonthlyRules((rulesResult.data ?? []) as MonthlyRegionRule[]);
+      setWeeklyStatuses((weeklyResult.data ?? []) as WeeklyMarketStatus[]);
+
       setSelectedUserId("all");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "讀取全部員工填報失敗");
+      setError(e instanceof Error ? e.message : "讀取員工彙總失敗");
     } finally {
       setLoading(false);
     }
   }
 
-  const profileMap = useMemo(() => {
-    const map = new Map<string, Profile>();
-    profiles.forEach((p) => map.set(p.id, p));
-    return map;
-  }, [profiles]);
+  const summaryRows = useMemo<EmployeeSummaryRow[]>(() => {
+    return profiles.map((profile) => {
+      const userEntries = entries.filter((entry) => entry.user_id === profile.id);
 
-  const regionMap = useMemo(() => {
-    const map = new Map<number, RegionCategory>();
-    regions.forEach((r) => map.set(r.id, r));
-    return map;
-  }, [regions]);
-
-  const mergedRows = useMemo<ReportRow[]>(() => {
-    return entries.map((entry) => ({
-      ...entry,
-      profile: profileMap.get(entry.user_id) ?? null,
-      region: regionMap.get(entry.region_id) ?? null,
-    }));
-  }, [entries, profileMap, regionMap]);
+      return computeEmployeeSummary({
+        profile,
+        entries: userEntries,
+        regions,
+        monthlyRules,
+        weeklyStatuses,
+      });
+    });
+  }, [profiles, entries, regions, monthlyRules, weeklyStatuses]);
 
   const filteredRows = useMemo(() => {
     const q = keyword.trim().toLowerCase();
 
-    return mergedRows.filter((row) => {
-      const matchUser =
-        selectedUserId === "all" ? true : row.user_id === selectedUserId;
-
+    return summaryRows.filter((row) => {
+      const matchUser = selectedUserId === "all" ? true : row.id === selectedUserId;
       if (!matchUser) return false;
+
+      const matchAchievement =
+        achievementFilter === "all"
+          ? true
+          : achievementFilter === "achieved"
+          ? row.achievement_status === "達標"
+          : achievementFilter === "not_achieved"
+          ? row.achievement_status === "未達標"
+          : achievementFilter === "not_filled"
+          ? row.achievement_status === "未填報"
+          : true;
+
+      if (!matchAchievement) return false;
+
       if (!q) return true;
 
       return (
-        (row.profile?.display_name || "").toLowerCase().includes(q) ||
-        (row.profile?.employee_code || "").toLowerCase().includes(q) ||
-        (row.profile?.role || "").toLowerCase().includes(q) ||
-        (row.entry_date || "").toLowerCase().includes(q) ||
-        (row.region?.region_name_zh || "").toLowerCase().includes(q) ||
-        String(row.quantity).includes(q)
+        (row.display_name || "").toLowerCase().includes(q) ||
+        (row.employee_code || "").toLowerCase().includes(q) ||
+        (row.role || "").toLowerCase().includes(q) ||
+        String(row.total_quantity).includes(q) ||
+        String(row.adjusted_score).includes(q) ||
+        (row.achievement_status || "").toLowerCase().includes(q) ||
+        (row.last_entry_date || "").toLowerCase().includes(q)
       );
     });
-  }, [mergedRows, selectedUserId, keyword]);
+  }, [summaryRows, selectedUserId, achievementFilter, keyword]);
 
   if (loading) {
     return (
@@ -247,34 +469,82 @@ export default function AdminReportsPage() {
               Admin / 全部員工填報
             </h1>
             <p className="mt-1 text-sm text-slate-600">
-              可一次查看全部員工每日填報，並按月份、員工或關鍵字篩選。
+              以員工為單位查看當月填報彙總，每位員工只顯示一行。
             </p>
-            <div className="mt-3 flex flex-wrap gap-3 text-sm">
-              <span className="inline-flex rounded-full bg-blue-100 px-3 py-1 text-blue-700">
-                管理員：{displayName}
-              </span>
-              <span className="inline-flex rounded-full bg-slate-100 px-3 py-1 text-slate-700">
-                目前月份：{selectedYear}年 {selectedMonth}月
-              </span>
-              <span className="inline-flex rounded-full bg-slate-100 px-3 py-1 text-slate-700">
-                目前顯示：{filteredRows.length} 筆
-              </span>
-            </div>
           </div>
 
-          <PageActionButtons />
+          <PageActionButtons
+            buttons={[
+              {
+                label: "重新計算本月結算",
+                onClick: () => router.push("/admin"),
+                variant: "primary",
+              },
+              {
+                label: "個人 Dashboard",
+                onClick: () => router.push("/dashboard"),
+              },
+              {
+                label: "Admin 規則頁",
+                onClick: () => router.push("/admin"),
+              },
+              {
+                label: "員工總覽",
+                onClick: () => router.push("/admin/users"),
+              },
+              {
+                label: "全部填報",
+                onClick: () => router.push("/admin/reports"),
+              },
+              {
+                label: "每日填報",
+                onClick: () => router.push("/daily-entry"),
+              },
+              {
+                label: "過往記錄",
+                onClick: () => router.push("/history"),
+              },
+              {
+                label: "每週調分",
+                onClick: () => router.push("/admin/weekly-rules"),
+              },
+              {
+                label: "首頁",
+                onClick: () => router.push("/"),
+              },
+              {
+                label: "登出",
+                onClick: async () => {
+                  await supabase.auth.signOut();
+                  router.replace("/login");
+                },
+              },
+            ]}
+          />
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3 text-sm text-slate-600">
+          <span className="rounded-full bg-blue-50 px-3 py-1 text-blue-700">
+            管理員：{displayName}
+          </span>
+          <span className="rounded-full bg-slate-100 px-3 py-1">
+            目前月份：{selectedYear}年 {monthLabel(selectedMonth)}
+          </span>
+          <span className="rounded-full bg-slate-100 px-3 py-1">
+            目前顯示：{filteredRows.length} 人
+          </span>
         </div>
 
         <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-          <div className="grid gap-4 md:grid-cols-4">
-            <div>
-              <label className="mb-2 block text-sm font-medium text-slate-700">
+          <div className="grid gap-4 md:grid-cols-5">
+            <label className="block">
+              <span className="mb-2 block text-sm font-medium text-slate-700">
                 年份
-              </label>
+              </span>
               <select
                 value={selectedYear}
                 onChange={(e) => setSelectedYear(Number(e.target.value))}
-                className="w-full rounded-xl border border-slate-300 px-4 py-2 text-sm outline-none focus:border-slate-500"
+                className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none transition focus:border-slate-400"
               >
                 {years.map((year) => (
                   <option key={year} value={year}>
@@ -282,16 +552,16 @@ export default function AdminReportsPage() {
                   </option>
                 ))}
               </select>
-            </div>
+            </label>
 
-            <div>
-              <label className="mb-2 block text-sm font-medium text-slate-700">
+            <label className="block">
+              <span className="mb-2 block text-sm font-medium text-slate-700">
                 月份
-              </label>
+              </span>
               <select
                 value={selectedMonth}
                 onChange={(e) => setSelectedMonth(Number(e.target.value))}
-                className="w-full rounded-xl border border-slate-300 px-4 py-2 text-sm outline-none focus:border-slate-500"
+                className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none transition focus:border-slate-400"
               >
                 {months.map((month) => (
                   <option key={month} value={month}>
@@ -299,39 +569,55 @@ export default function AdminReportsPage() {
                   </option>
                 ))}
               </select>
-            </div>
+            </label>
 
-            <div>
-              <label className="mb-2 block text-sm font-medium text-slate-700">
+            <label className="block">
+              <span className="mb-2 block text-sm font-medium text-slate-700">
                 篩選員工
-              </label>
+              </span>
               <select
                 value={selectedUserId}
                 onChange={(e) => setSelectedUserId(e.target.value)}
-                className="w-full rounded-xl border border-slate-300 px-4 py-2 text-sm outline-none focus:border-slate-500"
+                className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none transition focus:border-slate-400"
               >
                 <option value="all">全部員工</option>
                 {profiles.map((profile) => (
                   <option key={profile.id} value={profile.id}>
-                    {profile.display_name ?? "未命名用戶"}
-                    {profile.employee_code ? `（${profile.employee_code}）` : ""}
+                    {(profile.display_name || "未命名員工") +
+                      (profile.employee_code ? ` / ${profile.employee_code}` : "")}
                   </option>
                 ))}
               </select>
-            </div>
+            </label>
 
-            <div>
-              <label className="mb-2 block text-sm font-medium text-slate-700">
+            <label className="block">
+              <span className="mb-2 block text-sm font-medium text-slate-700">
+                達標狀態
+              </span>
+              <select
+                value={achievementFilter}
+                onChange={(e) => setAchievementFilter(e.target.value)}
+                className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none transition focus:border-slate-400"
+              >
+                <option value="all">全部狀態</option>
+                <option value="achieved">達標</option>
+                <option value="not_achieved">未達標</option>
+                <option value="not_filled">未填報</option>
+              </select>
+            </label>
+
+            <label className="block">
+              <span className="mb-2 block text-sm font-medium text-slate-700">
                 搜尋
-              </label>
+              </span>
               <input
                 type="text"
                 value={keyword}
                 onChange={(e) => setKeyword(e.target.value)}
-                placeholder="搜尋姓名 / 員工編號 / 日期 / 地區 / 份數"
-                className="w-full rounded-xl border border-slate-300 px-4 py-2 text-sm outline-none focus:border-slate-500"
+                placeholder="搜尋姓名 / 員工編號 / 角色 / 總份數"
+                className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none transition focus:border-slate-400"
               />
-            </div>
+            </label>
           </div>
         </div>
 
@@ -339,45 +625,83 @@ export default function AdminReportsPage() {
           <div className="overflow-x-auto">
             <table className="min-w-full border-collapse">
               <thead>
-                <tr className="border-b border-slate-200 text-left text-sm font-semibold text-slate-600">
-                  <th className="px-3 py-3">員工名稱</th>
-                  <th className="px-3 py-3">員工編號</th>
-                  <th className="px-3 py-3">角色</th>
-                  <th className="px-3 py-3">填報日期</th>
-                  <th className="px-3 py-3">地區</th>
-                  <th className="px-3 py-3">份數</th>
-                  <th className="px-3 py-3">建立時間</th>
+                <tr className="border-b border-slate-200 text-left text-sm text-slate-700">
+                  <th className="px-3 py-3 font-semibold">員工名稱</th>
+                  <th className="px-3 py-3 font-semibold">員工編號</th>
+                  <th className="px-3 py-3 font-semibold">角色</th>
+                  <th className="px-3 py-3 font-semibold">達標狀態</th>
+                  <th className="px-3 py-3 font-semibold">本月總份數</th>
+                  <th className="px-3 py-3 font-semibold">非內地份數</th>
+                  <th className="px-3 py-3 font-semibold">調整後分數</th>
+                  <th className="px-3 py-3 font-semibold">最後填報日期</th>
+                  <th className="px-3 py-3 font-semibold">建立時間</th>
                 </tr>
               </thead>
-
               <tbody>
                 {filteredRows.length === 0 ? (
                   <tr>
-                    <td className="px-3 py-6 text-sm text-slate-500" colSpan={7}>
-                      目前沒有符合條件的填報資料。
+                    <td className="px-3 py-6 text-sm text-slate-500" colSpan={9}>
+                      目前沒有符合條件的員工資料。
                     </td>
                   </tr>
                 ) : (
                   filteredRows.map((row) => (
                     <tr key={row.id} className="border-b border-slate-100 text-sm">
-                      <td className="px-3 py-3">{row.profile?.display_name ?? "-"}</td>
-                      <td className="px-3 py-3">{row.profile?.employee_code ?? "-"}</td>
+                      <td className="px-3 py-3">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            router.push(
+                              `/history?userId=${row.id}&year=${selectedYear}&month=${selectedMonth}`
+                            )
+                          }
+                          className="font-medium text-blue-700 underline underline-offset-2 hover:text-blue-900"
+                        >
+                          {row.display_name ?? "-"}
+                        </button>
+                      </td>
+
+                      <td className="px-3 py-3">{row.employee_code ?? "-"}</td>
+
                       <td className="px-3 py-3">
                         <span
                           className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
-                            row.profile?.role === "admin"
+                            row.role === "admin"
                               ? "bg-red-100 text-red-700"
                               : "bg-blue-100 text-blue-700"
                           }`}
                         >
-                          {row.profile?.role === "admin" ? "ADMIN" : "STAFF"}
+                          {row.role === "admin" ? "ADMIN" : "STAFF"}
                         </span>
                       </td>
-                      <td className="px-3 py-3">{formatDate(row.entry_date)}</td>
-                      <td className="px-3 py-3">{row.region?.region_name_zh ?? "-"}</td>
-                      <td className="px-3 py-3 font-medium text-slate-900">
-                        {row.quantity}
+
+                      <td className="px-3 py-3">
+                        <span
+                          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
+                            row.achievement_status === "達標"
+                              ? "bg-green-100 text-green-700"
+                              : row.achievement_status === "未達標"
+                              ? "bg-amber-100 text-amber-700"
+                              : "bg-slate-100 text-slate-600"
+                          }`}
+                        >
+                          {row.achievement_status}
+                        </span>
                       </td>
+
+                      <td className="px-3 py-3 font-medium text-slate-900">
+                        {row.total_quantity}
+                      </td>
+
+                      <td className="px-3 py-3 font-medium text-slate-900">
+                        {row.non_mainland_qty}
+                      </td>
+
+                      <td className="px-3 py-3 font-medium text-slate-900">
+                        {row.adjusted_score}
+                      </td>
+
+                      <td className="px-3 py-3">{formatDate(row.last_entry_date)}</td>
                       <td className="px-3 py-3">{formatDateTime(row.created_at)}</td>
                     </tr>
                   ))
@@ -388,10 +712,11 @@ export default function AdminReportsPage() {
 
           <div className="mt-6 rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
             <p>說明：</p>
-            <p className="mt-2">1. 此頁只供 admin 查看全部員工填報資料。</p>
-            <p>2. 此頁顯示的是 daily_entries 的地區份數填報記錄，不是舊版 daily_reports 文字內容。</p>
-            <p>3. 系統會按所選年份及月份顯示資料，與 Dashboard / 過往記錄的月份邏輯一致。</p>
-            <p>4. 管理員進入此頁時，系統會預設顯示當月、全部員工的資料。</p>
+            <p className="mt-2">1. 此頁只供 admin 查看全部員工當月彙總資料。</p>
+            <p>2. 此頁以員工為單位，每位員工只顯示一行，不再按每日或地區拆開。</p>
+            <p>3. 達標條件：本月總份數達 400、非內地份數達 100、調整後分數達 420。</p>
+            <p>4. 若員工當月完全未填報，則顯示為「未填報」。</p>
+            <p>5. 點擊員工名稱，可直接進入該員工該月份的過往記錄。</p>
           </div>
 
           {error ? (

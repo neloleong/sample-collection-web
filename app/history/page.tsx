@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "../../lib/supabase";
 import PageActionButtons from "../components/PageActionButtons";
 import {
@@ -54,7 +54,6 @@ type LiveMonthlySummary = {
   meets_structure: boolean;
   final_status: string;
 };
-
 
 function statusLabel(status: WeeklyMarketStatus["status_color"]) {
   switch (status) {
@@ -134,7 +133,6 @@ function computeLiveSummary(params: {
 
   for (const entry of sortedEntries) {
     const qty = Number(entry.quantity ?? 0);
-
     if (qty <= 0) continue;
 
     totalValidQty += qty;
@@ -174,7 +172,10 @@ function computeLiveSummary(params: {
     adjustedScore += entryRawScore * Number(multiplier);
 
     runningQtyByRegion.set(entry.region_id, beforeQty + qty);
-    totalByRegion.set(entry.region_id, (totalByRegion.get(entry.region_id) ?? 0) + qty);
+    totalByRegion.set(
+      entry.region_id,
+      (totalByRegion.get(entry.region_id) ?? 0) + qty
+    );
   }
 
   for (const region of regions) {
@@ -217,17 +218,38 @@ function computeLiveSummary(params: {
 
 export default function HistoryPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const currentYear = getCurrentYear();
   const currentMonth = new Date().getMonth() + 1;
 
+  const presetUserId = searchParams.get("userId");
+  const presetYear = searchParams.get("year");
+  const presetMonth = searchParams.get("month");
+
+  const initialYear =
+    presetYear && !Number.isNaN(Number(presetYear))
+      ? Number(presetYear)
+      : currentYear;
+
+  const initialMonth =
+    presetMonth &&
+    !Number.isNaN(Number(presetMonth)) &&
+    Number(presetMonth) >= 1 &&
+    Number(presetMonth) <= 12
+      ? Number(presetMonth)
+      : currentMonth;
+
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [displayName, setDisplayName] = useState("");
+  const [viewingUserId, setViewingUserId] = useState<string | null>(
+    presetUserId || null
+  );
 
   const [regions, setRegions] = useState<RegionCategory[]>([]);
-  const [selectedYear, setSelectedYear] = useState<number>(currentYear);
-  const [selectedMonth, setSelectedMonth] = useState<number>(currentMonth);
+  const [selectedYear, setSelectedYear] = useState<number>(initialYear);
+  const [selectedMonth, setSelectedMonth] = useState<number>(initialMonth);
 
   const [entries, setEntries] = useState<DailyEntry[]>([]);
   const [monthlyRules, setMonthlyRules] = useState<MonthlyRegionRule[]>([]);
@@ -287,11 +309,15 @@ export default function HistoryPage() {
     setLoading(true);
     setMessage("");
 
-    const { data: profileData } = await supabase
+    const { data: profileData, error: profileError } = await supabase
       .from("profiles")
       .select("display_name")
       .eq("id", userId)
       .maybeSingle();
+
+    if (profileError) {
+      setMessage(profileError.message);
+    }
 
     setDisplayName(profileData?.display_name ?? userEmail ?? "User");
 
@@ -327,7 +353,9 @@ export default function HistoryPage() {
 
     const { data: rulesData, error: rulesError } = await supabase
       .from("monthly_region_rules")
-      .select("region_id, rule_month, quota, basic_score, extended_score, balance_score")
+      .select(
+        "region_id, rule_month, quota, basic_score, extended_score, balance_score"
+      )
       .eq("rule_month", monthStart)
       .order("region_id", { ascending: true });
 
@@ -368,11 +396,14 @@ export default function HistoryPage() {
         return;
       }
 
-      await loadHistoryData(user.id, user.email);
+      const targetUserId = presetUserId || user.id;
+      setViewingUserId(targetUserId);
+
+      await loadHistoryData(targetUserId, user.email);
     };
 
     void init();
-  }, [router, monthStart, nextMonthStart]);
+  }, [router, presetUserId, monthStart, nextMonthStart]);
 
   if (loading) {
     return (
@@ -391,7 +422,9 @@ export default function HistoryPage() {
           <div>
             <h1 className="text-2xl font-bold text-slate-900">過往記錄</h1>
             <p className="mt-1 text-sm text-slate-600">使用者：{displayName}</p>
-            <p className="mt-1 text-sm text-slate-500">可按年份展開月份查看歷史資料</p>
+            <p className="mt-1 text-sm text-slate-500">
+              {viewingUserId ? "可按年份展開月份查看歷史資料" : "載入中"}
+            </p>
           </div>
 
           <PageActionButtons />
@@ -425,6 +458,7 @@ export default function HistoryPage() {
                       return (
                         <button
                           key={`${year}-${month}`}
+                          type="button"
                           onClick={() => {
                             setSelectedYear(year);
                             setSelectedMonth(month);

@@ -9,6 +9,16 @@ type ProfileRow = {
   role: "staff" | "admin";
 };
 
+type ActionButton = {
+  label: string;
+  onClick: () => void | Promise<void>;
+  variant?: "default" | "primary";
+};
+
+type PageActionButtonsProps = {
+  buttons?: ActionButton[];
+};
+
 function getMonthStart() {
   const now = new Date();
   const year = now.getFullYear();
@@ -16,7 +26,9 @@ function getMonthStart() {
   return `${year}-${month}-01`;
 }
 
-export default function PageActionButtons() {
+export default function PageActionButtons({
+  buttons,
+}: PageActionButtonsProps) {
   const router = useRouter();
 
   const [isAdmin, setIsAdmin] = useState(false);
@@ -72,10 +84,32 @@ export default function PageActionButtons() {
     router.replace("/login");
   };
 
+  if (buttons && buttons.length > 0) {
+    return (
+      <div className="flex flex-wrap gap-3">
+        {buttons.map((button) => (
+          <button
+            key={button.label}
+            type="button"
+            onClick={() => void button.onClick()}
+            className={
+              button.variant === "primary"
+                ? "rounded-xl bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
+                : "rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100"
+            }
+          >
+            {button.label}
+          </button>
+        ))}
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-wrap gap-3">
       {isAdmin ? (
         <button
+          type="button"
           onClick={handleRecalculate}
           disabled={recalcLoading}
           className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800 disabled:opacity-50"
@@ -113,6 +147,13 @@ export default function PageActionButtons() {
           >
             全部填報
           </Link>
+
+          <Link
+            href="/admin/weekly-rules"
+            className="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100"
+          >
+            每週調分
+          </Link>
         </>
       ) : null}
 
@@ -130,15 +171,6 @@ export default function PageActionButtons() {
         過往記錄
       </Link>
 
-      {isAdmin ? (
-        <Link
-          href="/weekly-rules"
-          className="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100"
-        >
-          每週調分
-        </Link>
-      ) : null}
-
       <Link
         href="/"
         className="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100"
@@ -147,6 +179,7 @@ export default function PageActionButtons() {
       </Link>
 
       <button
+        type="button"
         onClick={handleSignOut}
         className="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100"
       >
