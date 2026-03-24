@@ -39,7 +39,8 @@ export default function DailyEntryPage() {
 
   const totalQty = useMemo(() => {
     return regions.reduce((sum, region) => {
-      const value = Number(quantities[region.id] ?? 0);
+      const raw = quantities[region.id] ?? "";
+      const value = raw === "" ? 0 : Number(raw);
       return sum + (Number.isNaN(value) ? 0 : value);
     }, 0);
   }, [regions, quantities]);
@@ -48,7 +49,8 @@ export default function DailyEntryPage() {
     return regions
       .filter((region) => region.is_non_mainland)
       .reduce((sum, region) => {
-        const value = Number(quantities[region.id] ?? 0);
+        const raw = quantities[region.id] ?? "";
+        const value = raw === "" ? 0 : Number(raw);
         return sum + (Number.isNaN(value) ? 0 : value);
       }, 0);
   }, [regions, quantities]);
@@ -56,7 +58,7 @@ export default function DailyEntryPage() {
   const buildEmptyQuantities = (regionList: RegionCategory[]) => {
     const initial: Record<number, string> = {};
     regionList.forEach((region) => {
-      initial[region.id] = "0";
+      initial[region.id] = "";
     });
     return initial;
   };
@@ -129,8 +131,8 @@ export default function DailyEntryPage() {
       setLoading(false);
     };
 
-    init();
-  }, [router, selectedDate]);
+    void init();
+  }, [router]);
 
   useEffect(() => {
     const reloadByDate = async () => {
@@ -138,7 +140,7 @@ export default function DailyEntryPage() {
       await loadDailyEntries(userId, selectedDate, regions);
     };
 
-    reloadByDate();
+    void reloadByDate();
   }, [userId, selectedDate, regions]);
 
   const handleQuantityChange = (regionId: number, value: string) => {
@@ -163,17 +165,26 @@ export default function DailyEntryPage() {
     setMessage("");
 
     const positivePayload = regions
-      .map((region) => ({
-        user_id: userId,
-        entry_date: selectedDate,
-        region_id: region.id,
-        quantity: Math.max(0, Number(quantities[region.id] ?? 0) || 0),
-        note: null,
-      }))
+      .map((region) => {
+        const raw = quantities[region.id] ?? "";
+        const qty = raw === "" ? 0 : Math.max(0, Number(raw) || 0);
+
+        return {
+          user_id: userId,
+          entry_date: selectedDate,
+          region_id: region.id,
+          quantity: qty,
+          note: null,
+        };
+      })
       .filter((row) => row.quantity > 0);
 
     const zeroRegionIds = regions
-      .filter((region) => Math.max(0, Number(quantities[region.id] ?? 0) || 0) === 0)
+      .filter((region) => {
+        const raw = quantities[region.id] ?? "";
+        const qty = raw === "" ? 0 : Math.max(0, Number(raw) || 0);
+        return qty === 0;
+      })
       .map((region) => region.id);
 
     if (positivePayload.length > 0) {
@@ -286,7 +297,8 @@ export default function DailyEntryPage() {
                     type="number"
                     min="0"
                     step="1"
-                    value={quantities[region.id] ?? "0"}
+                    placeholder="請輸入份數"
+                    value={quantities[region.id] ?? ""}
                     onChange={(e) =>
                       handleQuantityChange(region.id, e.target.value)
                     }

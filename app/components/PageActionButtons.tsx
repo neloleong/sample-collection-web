@@ -2,9 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { useRouter, usePathname } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabase";
-
 
 type ProfileRow = {
   role: "staff" | "admin";
@@ -19,7 +18,6 @@ function getMonthStart() {
 
 export default function PageActionButtons() {
   const router = useRouter();
-  const pathname = usePathname();
 
   const [isAdmin, setIsAdmin] = useState(false);
   const [recalcLoading, setRecalcLoading] = useState(false);
@@ -32,11 +30,13 @@ export default function PageActionButtons() {
 
       if (!user) return;
 
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("profiles")
         .select("role")
         .eq("id", user.id)
         .maybeSingle();
+
+      if (error) return;
 
       const profile = (data as ProfileRow | null) ?? null;
       setIsAdmin(profile?.role === "admin");
@@ -48,21 +48,23 @@ export default function PageActionButtons() {
   const handleRecalculate = async () => {
     setRecalcLoading(true);
 
-    const monthStart = getMonthStart();
+    try {
+      const monthStart = getMonthStart();
 
-    const { error } = await supabase.rpc("recalculate_monthly_summary_v2", {
-      p_summary_month: monthStart,
-    });
+      const { error } = await supabase.rpc("recalculate_monthly_summary_v2", {
+        p_summary_month: monthStart,
+      });
 
-    setRecalcLoading(false);
+      if (error) {
+        alert(error.message);
+        return;
+      }
 
-    if (error) {
-      alert(error.message);
-      return;
+      router.refresh();
+      alert("本月月結算已重新計算完成。");
+    } finally {
+      setRecalcLoading(false);
     }
-
-    router.refresh();
-    alert("本月月結算已重新計算完成。");
   };
 
   const handleSignOut = async () => {
@@ -128,12 +130,14 @@ export default function PageActionButtons() {
         過往記錄
       </Link>
 
-      <Link
-        href="/weekly-rules"
-        className="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100"
-      >
-        每週調分
-      </Link>
+      {isAdmin ? (
+        <Link
+          href="/weekly-rules"
+          className="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100"
+        >
+          每週調分
+        </Link>
+      ) : null}
 
       <Link
         href="/"

@@ -4,6 +4,13 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabase";
 import PageActionButtons from "../components/PageActionButtons";
+import {
+  getMonthStartString,
+  getNextMonthStart,
+  getCurrentYear,
+  getYearOptions,
+  monthLabel,
+} from "@/lib/month";
 
 type RegionCategory = {
   id: number;
@@ -17,19 +24,6 @@ type DailyEntry = {
   entry_date: string;
   region_id: number;
   quantity: number;
-};
-
-type MonthlySummary = {
-  total_valid_qty: number;
-  non_mainland_qty: number;
-  raw_score: number;
-  adjusted_score: number;
-  final_bonus_mop: number;
-  meets_qty_400: boolean;
-  meets_non_mainland_100: boolean;
-  meets_score_420: boolean;
-  meets_structure: boolean;
-  final_status: string;
 };
 
 type MonthlyRegionRule = {
@@ -49,33 +43,18 @@ type WeeklyMarketStatus = {
   multiplier: number;
 };
 
-function getMonthStartString(year: number, month: number) {
-  return `${year}-${String(month).padStart(2, "0")}-01`;
-}
+type LiveMonthlySummary = {
+  total_valid_qty: number;
+  non_mainland_qty: number;
+  raw_score: number;
+  adjusted_score: number;
+  meets_qty_400: boolean;
+  meets_non_mainland_100: boolean;
+  meets_score_420: boolean;
+  meets_structure: boolean;
+  final_status: string;
+};
 
-function getNextMonthStart(monthStart: string) {
-  const date = new Date(`${monthStart}T00:00:00`);
-  date.setMonth(date.getMonth() + 1);
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  return `${year}-${month}-01`;
-}
-
-function getCurrentYear() {
-  return new Date().getFullYear();
-}
-
-function getYearOptions(startYear = 2024, endYear = getCurrentYear()) {
-  const years: number[] = [];
-  for (let y = endYear; y >= startYear; y--) {
-    years.push(y);
-  }
-  return years;
-}
-
-function monthLabel(month: number) {
-  return `${month}月`;
-}
 
 function statusLabel(status: WeeklyMarketStatus["status_color"]) {
   switch (status) {
@@ -92,6 +71,150 @@ function statusLabel(status: WeeklyMarketStatus["status_color"]) {
   }
 }
 
+function round2(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function getWeekStartDateString(dateString: string) {
+  const date = new Date(`${dateString}T00:00:00`);
+  const day = date.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  date.setDate(date.getDate() + diff);
+
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const dayOfMonth = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${dayOfMonth}`;
+}
+
+function buildWeeklyMultiplierMap(statuses: WeeklyMarketStatus[]) {
+  const map = new Map<string, number>();
+
+  statuses.forEach((row) => {
+    map.set(
+      `${row.week_start_date}__${row.region_id}`,
+      Number(row.multiplier ?? 1)
+    );
+  });
+
+  return map;
+}
+
+function computeLiveSummary(params: {
+  entries: DailyEntry[];
+  regions: RegionCategory[];
+  monthlyRules: MonthlyRegionRule[];
+  weeklyStatuses: WeeklyMarketStatus[];
+}): LiveMonthlySummary {
+  const { entries, regions, monthlyRules, weeklyStatuses } = params;
+
+  const regionMap = new Map<number, RegionCategory>();
+  regions.forEach((region) => regionMap.set(region.id, region));
+
+  const ruleMap = new Map<number, MonthlyRegionRule>();
+  monthlyRules.forEach((rule) => ruleMap.set(rule.region_id, rule));
+
+  const weeklyMultiplierMap = buildWeeklyMultiplierMap(weeklyStatuses);
+
+  const sortedEntries = [...entries].sort((a, b) => {
+    if (a.entry_date !== b.entry_date) {
+      return a.entry_date.localeCompare(b.entry_date);
+    }
+    return a.id - b.id;
+  });
+
+  const runningQtyByRegion = new Map<number, number>();
+  const totalByRegion = new Map<number, number>();
+
+  let totalValidQty = 0;
+  let nonMainlandQty = 0;
+  let rawScore = 0;
+  let adjustedScore = 0;
+
+  for (const entry of sortedEntries) {
+    const qty = Number(entry.quantity ?? 0);
+
+    if (qty <= 0) continue;
+
+    totalValidQty += qty;
+
+    const region = regionMap.get(entry.region_id);
+    if (region?.is_non_mainland) {
+      nonMainlandQty += qty;
+    }
+
+    const rule = ruleMap.get(entry.region_id);
+
+    const quota = Math.max(Number(rule?.quota ?? 0), 0);
+    const basicScore = Number(rule?.basic_score ?? 0);
+    const extendedScore = Number(rule?.extended_score ?? basicScore);
+
+    const beforeQty = runningQtyByRegion.get(entry.region_id) ?? 0;
+
+    let basicQty = 0;
+    let extendedQty = 0;
+
+    if (quota > 0) {
+      const remainBasicQuota = Math.max(quota - beforeQty, 0);
+      basicQty = Math.min(qty, remainBasicQuota);
+      extendedQty = Math.max(qty - basicQty, 0);
+    } else {
+      basicQty = qty;
+      extendedQty = 0;
+    }
+
+    const entryRawScore = basicQty * basicScore + extendedQty * extendedScore;
+
+    const weekStart = getWeekStartDateString(entry.entry_date);
+    const multiplier =
+      weeklyMultiplierMap.get(`${weekStart}__${entry.region_id}`) ?? 1;
+
+    rawScore += entryRawScore;
+    adjustedScore += entryRawScore * Number(multiplier);
+
+    runningQtyByRegion.set(entry.region_id, beforeQty + qty);
+    totalByRegion.set(entry.region_id, (totalByRegion.get(entry.region_id) ?? 0) + qty);
+  }
+
+  for (const region of regions) {
+    const total = totalByRegion.get(region.id) ?? 0;
+    const rule = ruleMap.get(region.id);
+
+    const quota = Math.max(Number(rule?.quota ?? 0), 0);
+    const balanceScore = Number(rule?.balance_score ?? 0);
+
+    if (total > 0 && quota > 0 && total < quota && balanceScore !== 0) {
+      rawScore += balanceScore;
+      adjustedScore += balanceScore;
+    }
+  }
+
+  const meetsQty400 = totalValidQty >= 400;
+  const meetsNonMainland100 = nonMainlandQty >= 100;
+  const meetsScore420 = adjustedScore >= 420;
+  const meetsStructure = totalValidQty > 0;
+
+  const finalStatus =
+    totalValidQty > 0
+      ? meetsQty400 && meetsNonMainland100 && meetsScore420 && meetsStructure
+        ? "已達標"
+        : "即時計算"
+      : "未結算";
+
+  return {
+    total_valid_qty: totalValidQty,
+    non_mainland_qty: nonMainlandQty,
+    raw_score: round2(rawScore),
+    adjusted_score: round2(adjustedScore),
+    meets_qty_400: meetsQty400,
+    meets_non_mainland_100: meetsNonMainland100,
+    meets_score_420: meetsScore420,
+    meets_structure: meetsStructure,
+    final_status: finalStatus,
+  };
+}
+
 export default function HistoryPage() {
   const router = useRouter();
 
@@ -106,7 +229,6 @@ export default function HistoryPage() {
   const [selectedYear, setSelectedYear] = useState<number>(currentYear);
   const [selectedMonth, setSelectedMonth] = useState<number>(currentMonth);
 
-  const [monthlySummary, setMonthlySummary] = useState<MonthlySummary | null>(null);
   const [entries, setEntries] = useState<DailyEntry[]>([]);
   const [monthlyRules, setMonthlyRules] = useState<MonthlyRegionRule[]>([]);
   const [weeklyStatuses, setWeeklyStatuses] = useState<WeeklyMarketStatus[]>([]);
@@ -152,6 +274,15 @@ export default function HistoryPage() {
     });
   }, [weeklyStatuses]);
 
+  const liveSummary = useMemo(() => {
+    return computeLiveSummary({
+      entries,
+      regions,
+      monthlyRules,
+      weeklyStatuses,
+    });
+  }, [entries, regions, monthlyRules, weeklyStatuses]);
+
   const loadHistoryData = async (userId: string, userEmail?: string | null) => {
     setLoading(true);
     setMessage("");
@@ -176,23 +307,6 @@ export default function HistoryPage() {
     }
 
     setRegions((regionData ?? []) as RegionCategory[]);
-
-    const { data: summaryData, error: summaryError } = await supabase
-      .from("monthly_summary")
-      .select(
-        "total_valid_qty, non_mainland_qty, raw_score, adjusted_score, final_bonus_mop, meets_qty_400, meets_non_mainland_100, meets_score_420, meets_structure, final_status"
-      )
-      .eq("user_id", userId)
-      .eq("summary_month", monthStart)
-      .maybeSingle();
-
-    if (summaryError) {
-      setMessage(summaryError.message);
-      setLoading(false);
-      return;
-    }
-
-    setMonthlySummary((summaryData as MonthlySummary | null) ?? null);
 
     const { data: entryData, error: entryError } = await supabase
       .from("daily_entries")
@@ -257,7 +371,7 @@ export default function HistoryPage() {
       await loadHistoryData(user.id, user.email);
     };
 
-    init();
+    void init();
   }, [router, monthStart, nextMonthStart]);
 
   if (loading) {
@@ -343,58 +457,51 @@ export default function HistoryPage() {
               <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
                 <p className="text-sm text-slate-500">本月總份數</p>
                 <p className="mt-2 text-3xl font-bold text-slate-900">
-                  {monthlySummary?.total_valid_qty ?? 0}
+                  {liveSummary.total_valid_qty}
                 </p>
               </div>
 
               <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
                 <p className="text-sm text-slate-500">非內地份數</p>
                 <p className="mt-2 text-3xl font-bold text-slate-900">
-                  {monthlySummary?.non_mainland_qty ?? 0}
+                  {liveSummary.non_mainland_qty}
                 </p>
               </div>
 
               <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-                <p className="text-sm text-slate-500">Raw Score</p>
+                <p className="text-sm text-slate-500">原始分數</p>
                 <p className="mt-2 text-3xl font-bold text-slate-900">
-                  {monthlySummary?.raw_score ?? 0}
+                  {liveSummary.raw_score}
                 </p>
               </div>
 
               <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-                <p className="text-sm text-slate-500">Bonus (MOP)</p>
+                <p className="text-sm text-slate-500">調整後分數</p>
                 <p className="mt-2 text-3xl font-bold text-slate-900">
-                  {monthlySummary?.final_bonus_mop ?? 0}
+                  {liveSummary.adjusted_score}
                 </p>
               </div>
             </div>
 
-            <div className="grid gap-4 md:grid-cols-4">
+            <div className="grid gap-4 md:grid-cols-3">
               <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-                <p className="text-sm text-slate-500">Adjusted Score</p>
-                <p className="mt-2 text-3xl font-bold text-slate-900">
-                  {monthlySummary?.adjusted_score ?? 0}
+                <p className="text-sm text-slate-500">400 份是否達標</p>
+                <p className="mt-2 text-2xl font-bold text-slate-900">
+                  {liveSummary.meets_qty_400 ? "是" : "否"}
                 </p>
               </div>
 
               <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-                <p className="text-sm text-slate-500">400 份達標</p>
+                <p className="text-sm text-slate-500">非內地 100 份是否達標</p>
                 <p className="mt-2 text-2xl font-bold text-slate-900">
-                  {monthlySummary?.meets_qty_400 ? "是" : "否"}
-                </p>
-              </div>
-
-              <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-                <p className="text-sm text-slate-500">非內地 100 份達標</p>
-                <p className="mt-2 text-2xl font-bold text-slate-900">
-                  {monthlySummary?.meets_non_mainland_100 ? "是" : "否"}
+                  {liveSummary.meets_non_mainland_100 ? "是" : "否"}
                 </p>
               </div>
 
               <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
                 <p className="text-sm text-slate-500">月結算狀態</p>
                 <p className="mt-2 text-2xl font-bold text-slate-900">
-                  {monthlySummary?.final_status ?? "未結算"}
+                  {liveSummary.final_status}
                 </p>
               </div>
             </div>
@@ -476,7 +583,7 @@ export default function HistoryPage() {
                       <th className="px-3 py-3">序號</th>
                       <th className="px-3 py-3">地區</th>
                       <th className="px-3 py-3">顏色</th>
-                      <th className="px-3 py-3">調整分數</th>
+                      <th className="px-3 py-3">調整倍率</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -545,6 +652,15 @@ export default function HistoryPage() {
                   </tbody>
                 </table>
               </div>
+            </div>
+
+            <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600 ring-1 ring-slate-200">
+              <p>使用說明：</p>
+              <p className="mt-2">1. 本頁為歷史月份資料頁，會根據該月份的填報記錄即時計算分數。</p>
+              <p>2. 原始分數：根據當月填報份數與地區規則計出的基礎分數，未加入市場倍率。</p>
+              <p>3. 調整後分數：在原始分數基礎上，套用每週市場調整倍率後的結果。</p>
+              <p>4. 若原始分數高於調整後分數，代表該月市場倍率整體低於 1，所以分數被下調。</p>
+              <p>5. 本頁不顯示獎金，只顯示歷史份數、分數、規則快照及每週調整記錄。</p>
             </div>
           </div>
         </div>
