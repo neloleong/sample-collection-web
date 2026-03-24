@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../../lib/supabase";
-import PageActionButtons from "@/app/components/PageActionButtons";
+import PageActionButtons from "../../components/PageActionButtons";
 
 type RegionCategory = {
   id: number;
