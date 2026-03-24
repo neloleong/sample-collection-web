@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "../../lib/supabase";
 import PageActionButtons from "../components/PageActionButtons";
@@ -216,7 +216,7 @@ function computeLiveSummary(params: {
   };
 }
 
-export default function HistoryPage() {
+function HistoryPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -700,5 +700,21 @@ export default function HistoryPage() {
         </div>
       </div>
     </main>
+  );
+}
+
+export default function HistoryPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="min-h-screen bg-slate-50 px-6 py-10">
+          <div className="mx-auto max-w-7xl rounded-2xl bg-white p-8 shadow-sm ring-1 ring-slate-200">
+            載入中...
+          </div>
+        </main>
+      }
+    >
+      <HistoryPageContent />
+    </Suspense>
   );
 }
