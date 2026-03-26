@@ -9,7 +9,6 @@ import {
   getMonthStartString,
   getNextMonthStart,
   getYearOptions,
-  monthLabel,
 } from "../../../lib/month";
 
 type AchievementStatus = "未填報" | "未達標" | "達標";
@@ -30,7 +29,8 @@ type DailyEntryLite = {
 
 type RegionLite = {
   id: number;
-  is_non_mainland: boolean | null;
+  region_name_zh: string | null;
+  sort_order: number | null;
 };
 
 type SummaryRow = {
@@ -38,10 +38,18 @@ type SummaryRow = {
   display_name: string | null;
   employee_code: string | null;
   total_quantity: number;
-  non_mainland_qty: number;
-  adjusted_score: number;
   achievement_status: AchievementStatus;
 };
+
+type RegionStat = {
+  region_id: number;
+  region_name_zh: string;
+  quantity: number;
+  sort_order: number;
+};
+
+const MONTH_TOTAL_TARGET = 2500;
+const STAFF_TARGET = 400;
 
 function progressPercent(value: number, target: number) {
   if (target <= 0) return 0;
@@ -52,6 +60,7 @@ export default function ReportManagementPage() {
   const [loading, setLoading] = useState(true);
   const [displayName, setDisplayName] = useState("");
   const [rows, setRows] = useState<SummaryRow[]>([]);
+  const [regionStats, setRegionStats] = useState<RegionStat[]>([]);
 
   const currentYear = getCurrentYear();
   const currentYearMonth = getCurrentYearMonth();
@@ -115,7 +124,10 @@ export default function ReportManagementPage() {
           .select("user_id, region_id, quantity, entry_date")
           .gte("entry_date", monthStart)
           .lt("entry_date", nextMonthStart),
-        supabase.from("region_categories").select("id, is_non_mainland"),
+        supabase
+          .from("region_categories")
+          .select("id, region_name_zh, sort_order")
+          .order("sort_order", { ascending: true }),
       ]);
 
       if (!mounted) return;
@@ -123,6 +135,7 @@ export default function ReportManagementPage() {
       if (profilesError) {
         console.error("載入員工資料失敗:", profilesError.message);
         setRows([]);
+        setRegionStats([]);
         setLoading(false);
         return;
       }
@@ -130,6 +143,7 @@ export default function ReportManagementPage() {
       if (dailyEntriesError) {
         console.error("載入填報資料失敗:", dailyEntriesError.message);
         setRows([]);
+        setRegionStats([]);
         setLoading(false);
         return;
       }
@@ -137,6 +151,7 @@ export default function ReportManagementPage() {
       if (regionsError) {
         console.error("載入地區資料失敗:", regionsError.message);
         setRows([]);
+        setRegionStats([]);
         setLoading(false);
         return;
       }
@@ -145,70 +160,63 @@ export default function ReportManagementPage() {
         (profile) => profile.role === "staff"
       );
 
-      const regionMap = new Map<number, RegionLite>();
-      ((regionsData ?? []) as RegionLite[]).forEach((region) => {
-        regionMap.set(region.id, region);
-      });
+      const regions = (regionsData ?? []) as RegionLite[];
+      const dailyEntries = (dailyEntriesData ?? []) as DailyEntryLite[];
 
-      const entriesByUser = new Map<
-        string,
-        {
-          total_quantity: number;
-          non_mainland_qty: number;
-        }
-      >();
+      const entriesByUser = new Map<string, number>();
+      const entriesByRegion = new Map<number, number>();
 
-      ((dailyEntriesData ?? []) as DailyEntryLite[]).forEach((entry) => {
+      dailyEntries.forEach((entry) => {
         const quantity = Number(entry.quantity ?? 0);
-        const region = regionMap.get(entry.region_id);
-        const current = entriesByUser.get(entry.user_id) ?? {
-          total_quantity: 0,
-          non_mainland_qty: 0,
-        };
 
-        current.total_quantity += quantity;
+        entriesByUser.set(
+          entry.user_id,
+          (entriesByUser.get(entry.user_id) ?? 0) + quantity
+        );
 
-        if (region?.is_non_mainland) {
-          current.non_mainland_qty += quantity;
-        }
-
-        entriesByUser.set(entry.user_id, current);
+        entriesByRegion.set(
+          entry.region_id,
+          (entriesByRegion.get(entry.region_id) ?? 0) + quantity
+        );
       });
 
-      const mergedRows: SummaryRow[] = staffProfiles.map((profile) => {
-        const stats = entriesByUser.get(profile.id) ?? {
-          total_quantity: 0,
-          non_mainland_qty: 0,
-        };
+      const mergedRows: SummaryRow[] = staffProfiles
+        .map((profile) => {
+          const totalQuantity = entriesByUser.get(profile.id) ?? 0;
 
-        const adjusted_score = stats.total_quantity;
+          let achievementStatus: AchievementStatus = "未填報";
 
-        let achievement_status: AchievementStatus = "未填報";
-        if (stats.total_quantity > 0) {
-          achievement_status =
-            stats.total_quantity >= 400 &&
-            stats.non_mainland_qty >= 100 &&
-            adjusted_score >= 420
-              ? "達標"
-              : "未達標";
-        }
+          if (totalQuantity > 0) {
+            achievementStatus = totalQuantity >= STAFF_TARGET ? "達標" : "未達標";
+          }
 
-        return {
-          user_id: profile.id,
-          display_name: profile.display_name ?? null,
-          employee_code: profile.employee_code ?? null,
-          total_quantity: stats.total_quantity,
-          non_mainland_qty: stats.non_mainland_qty,
-          adjusted_score,
-          achievement_status,
-        };
-      });
+          return {
+            user_id: profile.id,
+            display_name: profile.display_name ?? null,
+            employee_code: profile.employee_code ?? null,
+            total_quantity: totalQuantity,
+            achievement_status: achievementStatus,
+          };
+        })
+        .sort((a, b) =>
+          String(a.employee_code ?? "").localeCompare(String(b.employee_code ?? ""))
+        );
 
-      mergedRows.sort((a, b) =>
-        String(a.employee_code ?? "").localeCompare(String(b.employee_code ?? ""))
-      );
+      const finalRegionStats: RegionStat[] = regions
+        .map((region) => {
+          const quantity = entriesByRegion.get(region.id) ?? 0;
+
+          return {
+            region_id: region.id,
+            region_name_zh: region.region_name_zh ?? `地區 ${region.id}`,
+            quantity,
+            sort_order: region.sort_order ?? 9999,
+          };
+        })
+        .sort((a, b) => a.sort_order - b.sort_order);
 
       setRows(mergedRows);
+      setRegionStats(finalRegionStats);
       setLoading(false);
     }
 
@@ -221,8 +229,6 @@ export default function ReportManagementPage() {
 
   const aggregated = useMemo(() => {
     const totalQuantity = rows.reduce((sum, row) => sum + row.total_quantity, 0);
-    const nonMainlandQty = rows.reduce((sum, row) => sum + row.non_mainland_qty, 0);
-    const adjustedScore = rows.reduce((sum, row) => sum + row.adjusted_score, 0);
 
     const achievedCount = rows.filter(
       (row) => row.achievement_status === "達標"
@@ -237,6 +243,7 @@ export default function ReportManagementPage() {
     ).length;
 
     let settlementStatus = "未結算";
+
     if (rows.length > 0) {
       if (achievedCount === rows.length) {
         settlementStatus = "全部達標";
@@ -249,14 +256,17 @@ export default function ReportManagementPage() {
 
     return {
       totalQuantity,
-      nonMainlandQty,
-      adjustedScore,
       achievedCount,
       notAchievedCount,
       notFilledCount,
       settlementStatus,
     };
   }, [rows]);
+
+  const maxRegionQuantity = useMemo(() => {
+    if (regionStats.length === 0) return 0;
+    return Math.max(...regionStats.map((region) => region.quantity), 0);
+  }, [regionStats]);
 
   if (loading) {
     return (
@@ -313,7 +323,7 @@ export default function ReportManagementPage() {
                               : "border border-slate-300 text-slate-700 hover:bg-slate-100"
                           }`}
                         >
-                          {monthLabel(month)}
+                          {month}月
                         </button>
                       );
                     })}
@@ -348,74 +358,6 @@ export default function ReportManagementPage() {
               </div>
 
               <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <p className="text-sm text-slate-500">非內地總份數</p>
-                <p className="mt-2 text-3xl font-bold text-slate-900">
-                  {aggregated.nonMainlandQty}
-                </p>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <p className="text-sm text-slate-500">調整後總分</p>
-                <p className="mt-2 text-3xl font-bold text-slate-900">
-                  {aggregated.adjustedScore}
-                </p>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <p className="text-sm text-slate-500">月結算狀態</p>
-                <p className="mt-2 text-2xl font-bold text-slate-900">
-                  {aggregated.settlementStatus}
-                </p>
-              </div>
-            </section>
-
-            <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-              <h2 className="text-xl font-semibold text-slate-900">達標進度</h2>
-
-              <div className="mt-6 space-y-6">
-                <div>
-                  <div className="mb-2 flex items-center justify-between text-sm text-slate-700">
-                    <span>總份數（目標 400）</span>
-                    <span>{aggregated.totalQuantity} / 400</span>
-                  </div>
-                  <div className="h-3 w-full rounded-full bg-slate-200">
-                    <div
-                      className="h-3 rounded-full bg-green-600"
-                      style={{ width: `${progressPercent(aggregated.totalQuantity, 400)}%` }}
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <div className="mb-2 flex items-center justify-between text-sm text-slate-700">
-                    <span>非內地份數（目標 100）</span>
-                    <span>{aggregated.nonMainlandQty} / 100</span>
-                  </div>
-                  <div className="h-3 w-full rounded-full bg-slate-200">
-                    <div
-                      className="h-3 rounded-full bg-green-600"
-                      style={{ width: `${progressPercent(aggregated.nonMainlandQty, 100)}%` }}
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <div className="mb-2 flex items-center justify-between text-sm text-slate-700">
-                    <span>調整後分數（目標 420）</span>
-                    <span>{aggregated.adjustedScore} / 420</span>
-                  </div>
-                  <div className="h-3 w-full rounded-full bg-slate-200">
-                    <div
-                      className="h-3 rounded-full bg-green-600"
-                      style={{ width: `${progressPercent(aggregated.adjustedScore, 420)}%` }}
-                    />
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            <section className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-              <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
                 <p className="text-sm text-slate-500">達標人數</p>
                 <p className="mt-2 text-3xl font-bold text-slate-900">
                   {aggregated.achievedCount}
@@ -430,9 +372,80 @@ export default function ReportManagementPage() {
               </div>
 
               <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                <p className="text-sm text-slate-500">月結算狀態</p>
+                <p className="mt-2 text-2xl font-bold text-slate-900">
+                  {aggregated.settlementStatus}
+                </p>
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+              <h2 className="text-xl font-semibold text-slate-900">達標進度</h2>
+
+              <div className="mt-6">
+                <div className="mb-2 flex items-center justify-between text-sm text-slate-700">
+                  <span>總份數（目標 {MONTH_TOTAL_TARGET}）</span>
+                  <span>{aggregated.totalQuantity} / {MONTH_TOTAL_TARGET}</span>
+                </div>
+
+                <div className="h-3 w-full rounded-full bg-slate-200">
+                  <div
+                    className="h-3 rounded-full bg-green-600 transition-all"
+                    style={{
+                      width: `${progressPercent(
+                        aggregated.totalQuantity,
+                        MONTH_TOTAL_TARGET
+                      )}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+              <h2 className="text-xl font-semibold text-slate-900">地區統計</h2>
+
+              <div className="mt-6 space-y-5">
+                {regionStats.map((region) => (
+                  <div key={region.region_id}>
+                    <div className="mb-2 flex items-center justify-between gap-4 text-sm">
+                      <span className="font-medium text-slate-800">
+                        {region.region_name_zh}
+                      </span>
+                      <span className="font-semibold text-slate-700">
+                        {region.quantity}
+                      </span>
+                    </div>
+
+                    <div className="h-3 w-full rounded-full bg-slate-200">
+                      <div
+                        className="h-3 rounded-full bg-green-600 transition-all"
+                        style={{
+                          width: `${
+                            maxRegionQuantity > 0
+                              ? progressPercent(region.quantity, maxRegionQuantity)
+                              : 0
+                          }%`,
+                        }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
                 <p className="text-sm text-slate-500">未填報人數</p>
                 <p className="mt-2 text-3xl font-bold text-slate-900">
                   {aggregated.notFilledCount}
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                <p className="text-sm text-slate-500">目前顯示員工數</p>
+                <p className="mt-2 text-3xl font-bold text-slate-900">
+                  {rows.length}
                 </p>
               </div>
             </section>
