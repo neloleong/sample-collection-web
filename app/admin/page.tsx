@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import PageActionButtons from "@/app/components/PageActionButtons";
+import PageActionButtons from "../components/PageActionButtons";
 import Link from "next/link";
 
 
@@ -14,8 +14,12 @@ export default function AdminDashboard() {
         
         <div className="flex justify-between items-center">
           <h1 className="text-4xl font-bold">Admin Dashboard</h1>
-          <PageActionButtons />
+          
         </div>
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                  <PageActionButtons />
+        </div>
+        
 
         {/* 卡片區 */}
         <div className="grid md:grid-cols-3 gap-6">

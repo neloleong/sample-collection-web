@@ -387,7 +387,7 @@ export default function DashboardPage() {
   return (
     <main className="min-h-screen bg-slate-50 px-6 py-10">
       <div className="mx-auto max-w-7xl space-y-6">
-        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        
           <div>
             <h1 className="text-2xl font-bold text-slate-900">個人 Dashboard</h1>
             <p className="mt-1 text-sm text-slate-600">使用者：{displayName}</p>
@@ -395,7 +395,8 @@ export default function DashboardPage() {
               本次使用規則月份：{monthStart}
             </p>
           </div>
-
+          
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <PageActionButtons />
         </div>
 

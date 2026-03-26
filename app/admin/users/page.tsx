@@ -3,8 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-import PageActionButtons from "@/app/components/PageActionButtons";
-
+import PageActionButtons from "../../components/PageActionButtons";
 type Role = "admin" | "staff";
 
 type UserManagementRow = {
@@ -314,11 +313,10 @@ export default function AdminUsersPage() {
               目前顯示：{filteredRows.length} 位員工
             </p>
           </div>
-
-          <div className="flex flex-wrap gap-3">
-            <PageActionButtons />
-          </div>
         </div>
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                    <PageActionButtons />
+          </div>  
 
         <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
           <div className="mb-5 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">

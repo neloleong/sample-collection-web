@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-import PageActionButtons from "@/app/components/PageActionButtons";
+import PageActionButtons from "../../components/PageActionButtons";
+
 import {
   getCurrentYear,
   getCurrentYearMonth,
@@ -463,65 +464,7 @@ export default function AdminReportsPage() {
   return (
     <main className="min-h-screen bg-slate-50 px-6 py-10">
       <div className="mx-auto max-w-7xl space-y-6">
-        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900">
-              Admin / 全部員工填報
-            </h1>
-            <p className="mt-1 text-sm text-slate-600">
-              以員工為單位查看當月填報彙總，每位員工只顯示一行。
-            </p>
-          </div>
-
-          <PageActionButtons
-            buttons={[
-              {
-                label: "重新計算本月結算",
-                onClick: () => router.push("/admin"),
-                variant: "primary",
-              },
-              {
-                label: "個人 Dashboard",
-                onClick: () => router.push("/dashboard"),
-              },
-              {
-                label: "Admin 規則頁",
-                onClick: () => router.push("/admin"),
-              },
-              {
-                label: "員工總覽",
-                onClick: () => router.push("/admin/users"),
-              },
-              {
-                label: "全部填報",
-                onClick: () => router.push("/admin/reports"),
-              },
-              {
-                label: "每日填報",
-                onClick: () => router.push("/daily-entry"),
-              },
-              {
-                label: "過往記錄",
-                onClick: () => router.push("/history"),
-              },
-              {
-                label: "每週調分",
-                onClick: () => router.push("/admin/weekly-rules"),
-              },
-              {
-                label: "首頁",
-                onClick: () => router.push("/"),
-              },
-              {
-                label: "登出",
-                onClick: async () => {
-                  await supabase.auth.signOut();
-                  router.replace("/login");
-                },
-              },
-            ]}
-          />
-        </div>
+        
 
         <div className="flex flex-wrap items-center gap-3 text-sm text-slate-600">
           <span className="rounded-full bg-blue-50 px-3 py-1 text-blue-700">
@@ -534,6 +477,10 @@ export default function AdminReportsPage() {
             目前顯示：{filteredRows.length} 人
           </span>
         </div>
+
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                            <PageActionButtons />
+        </div>  
 
         <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
           <div className="grid gap-4 md:grid-cols-5">

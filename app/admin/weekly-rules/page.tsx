@@ -370,15 +370,15 @@ export default function AdminWeeklyRulesPage() {
     <main className="min-h-screen bg-slate-50 px-6 py-10">
       <div className="mx-auto max-w-7xl space-y-6">
         <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          
             <div>
               <h1 className="text-2xl font-bold text-slate-900">Admin 規則設定</h1>
               <p className="mt-1 text-sm text-slate-600">管理員：{displayName}</p>
               <p className="mt-1 text-sm text-slate-500">地區數量：{totalRegions}</p>
             </div>
-
-            <PageActionButtons />
-          </div>
+          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                    <PageActionButtons />
+          </div>  
 
           <div className="mt-6 grid gap-4 md:grid-cols-2">
             <div>
