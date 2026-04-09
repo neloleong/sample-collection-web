@@ -31,9 +31,12 @@ type RegionLite = {
   id: number;
   region_name_zh: string | null;
   sort_order: number | null;
-  quota?: number | null;
-  suggested_quota?: number | null;
-  recommended_quota?: number | null;
+};
+
+type MonthlyRegionRuleLite = {
+  region_id: number;
+  rule_month: string;
+  quota: number | null;
 };
 
 type SummaryRow = {
@@ -41,7 +44,6 @@ type SummaryRow = {
   display_name: string | null;
   employee_code: string | null;
   total_quantity: number;
-  total_score: number;
   achievement_status: AchievementStatus;
 };
 
@@ -94,7 +96,9 @@ export default function ReportManagementPage() {
   const currentYearMonth = getCurrentYearMonth();
 
   const [selectedYear, setSelectedYear] = useState<number>(currentYear);
-  const [selectedMonth, setSelectedMonth] = useState<number>(currentYearMonth.month);
+  const [selectedMonth, setSelectedMonth] = useState<number>(
+    currentYearMonth.month
+  );
 
   const years = useMemo(() => getYearOptions(2024, currentYear), [currentYear]);
   const months = useMemo(() => Array.from({ length: 12 }, (_, i) => i + 1), []);
@@ -142,6 +146,7 @@ export default function ReportManagementPage() {
         { data: profilesData, error: profilesError },
         { data: dailyEntriesData, error: dailyEntriesError },
         { data: regionsData, error: regionsError },
+        { data: monthlyRulesData, error: monthlyRulesError },
       ] = await Promise.all([
         supabase
           .from("profiles")
@@ -154,8 +159,12 @@ export default function ReportManagementPage() {
           .lt("entry_date", nextMonthStart),
         supabase
           .from("region_categories")
-          .select("*")
+          .select("id, region_name_zh, sort_order")
           .order("sort_order", { ascending: true }),
+        supabase
+          .from("monthly_region_rules")
+          .select("region_id, rule_month, quota")
+          .eq("rule_month", monthStart),
       ]);
 
       if (!mounted) return;
@@ -184,7 +193,13 @@ export default function ReportManagementPage() {
         return;
       }
 
-      console.log("regionsData", regionsData);
+      if (monthlyRulesError) {
+        console.error("載入本月建議配額失敗:", monthlyRulesError.message);
+        setRows([]);
+        setRegionStats([]);
+        setLoading(false);
+        return;
+      }
 
       const staffProfiles = ((profilesData ?? []) as ProfileLite[]).filter(
         (profile) => profile.role === "staff"
@@ -192,9 +207,11 @@ export default function ReportManagementPage() {
 
       const regions = (regionsData ?? []) as RegionLite[];
       const dailyEntries = (dailyEntriesData ?? []) as DailyEntryLite[];
+      const monthlyRules = (monthlyRulesData ?? []) as MonthlyRegionRuleLite[];
 
       const entriesByUser = new Map<string, number>();
       const entriesByRegion = new Map<number, number>();
+      const quotaByRegion = new Map<number, number>();
 
       dailyEntries.forEach((entry) => {
         const quantity = Number(entry.quantity ?? 0);
@@ -210,15 +227,19 @@ export default function ReportManagementPage() {
         );
       });
 
+      monthlyRules.forEach((rule) => {
+        quotaByRegion.set(rule.region_id, Number(rule.quota ?? 0));
+      });
+
       const mergedRows: SummaryRow[] = staffProfiles
         .map((profile) => {
           const totalQuantity = entriesByUser.get(profile.id) ?? 0;
-          const totalScore = totalQuantity;
 
           let achievementStatus: AchievementStatus = "未填報";
 
           if (totalQuantity > 0) {
-            achievementStatus = totalQuantity >= STAFF_TARGET ? "達標" : "未達標";
+            achievementStatus =
+              totalQuantity >= STAFF_TARGET ? "達標" : "未達標";
           }
 
           return {
@@ -226,30 +247,25 @@ export default function ReportManagementPage() {
             display_name: profile.display_name ?? null,
             employee_code: profile.employee_code ?? null,
             total_quantity: totalQuantity,
-            total_score: totalScore,
             achievement_status: achievementStatus,
           };
         })
         .sort((a, b) =>
-          String(a.employee_code ?? "").localeCompare(String(b.employee_code ?? ""))
+          String(a.employee_code ?? "").localeCompare(
+            String(b.employee_code ?? "")
+          )
         );
 
       const finalRegionStats: RegionStat[] = regions
         .map((region) => {
           const quantity = entriesByRegion.get(region.id) ?? 0;
-
-          const quotaValue = Number(
-            region.quota ??
-              region.suggested_quota ??
-              region.recommended_quota ??
-              0
-          );
+          const quota = quotaByRegion.get(region.id) ?? 0;
 
           return {
             region_id: region.id,
             region_name_zh: region.region_name_zh ?? `地區 ${region.id}`,
             quantity,
-            quota: quotaValue,
+            quota,
             sort_order: region.sort_order ?? 9999,
           };
         })
@@ -268,8 +284,15 @@ export default function ReportManagementPage() {
   }, [selectedYear, selectedMonth]);
 
   const aggregated = useMemo(() => {
-    const totalQuantity = rows.reduce((sum, row) => sum + row.total_quantity, 0);
-    const totalScore = rows.reduce((sum, row) => sum + row.total_score, 0);
+    const actualTotalQuantity = rows.reduce(
+      (sum, row) => sum + row.total_quantity,
+      0
+    );
+
+    const monthQuotaTotal = regionStats.reduce(
+      (sum, region) => sum + Number(region.quota ?? 0),
+      0
+    );
 
     const achievedCount = rows.filter(
       (row) => row.achievement_status === "達標"
@@ -296,26 +319,28 @@ export default function ReportManagementPage() {
     }
 
     return {
-      totalQuantity,
-      totalScore,
+      actualTotalQuantity,
+      monthQuotaTotal,
       achievedCount,
       notAchievedCount,
       notFilledCount,
       settlementStatus,
     };
-  }, [rows]);
-
-  const totalSuggestedQuota = useMemo(() => {
-    return regionStats.reduce((sum, region) => sum + Number(region.quota ?? 0), 0);
-  }, [regionStats]);
+  }, [rows, regionStats]);
 
   const totalProgressPercent = useMemo(() => {
-    return progressPercent(aggregated.totalScore, totalSuggestedQuota);
-  }, [aggregated.totalScore, totalSuggestedQuota]);
+    return progressPercent(
+      aggregated.actualTotalQuantity,
+      aggregated.monthQuotaTotal
+    );
+  }, [aggregated.actualTotalQuantity, aggregated.monthQuotaTotal]);
 
   const totalProgressColor = useMemo(() => {
-    return getProgressColor(aggregated.totalScore, totalSuggestedQuota);
-  }, [aggregated.totalScore, totalSuggestedQuota]);
+    return getProgressColor(
+      aggregated.actualTotalQuantity,
+      aggregated.monthQuotaTotal
+    );
+  }, [aggregated.actualTotalQuantity, aggregated.monthQuotaTotal]);
 
   if (loading) {
     return (
@@ -356,7 +381,8 @@ export default function ReportManagementPage() {
 
                   <div className="grid grid-cols-3 gap-2 border-t border-slate-200 px-4 py-4">
                     {months.map((month) => {
-                      const active = selectedYear === year && selectedMonth === month;
+                      const active =
+                        selectedYear === year && selectedMonth === month;
 
                       return (
                         <button
@@ -400,9 +426,9 @@ export default function ReportManagementPage() {
 
             <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
               <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <p className="text-sm text-slate-500">本月總分</p>
+                <p className="text-sm text-slate-500">本月總數</p>
                 <p className="mt-2 text-3xl font-bold text-slate-900">
-                  {aggregated.totalScore}
+                  {aggregated.monthQuotaTotal}
                 </p>
               </div>
 
@@ -433,14 +459,14 @@ export default function ReportManagementPage() {
 
               <div className="mt-6">
                 <div className="mb-2 flex items-center justify-between text-sm">
-                  <span className="text-slate-700">總分 / 建議配額總和</span>
+                  <span className="text-slate-700">本月實際完成 / 本月總數</span>
                   <span
                     className={`font-semibold ${getProgressTextColor(
-                      aggregated.totalScore,
-                      totalSuggestedQuota
+                      aggregated.actualTotalQuantity,
+                      aggregated.monthQuotaTotal
                     )}`}
                   >
-                    {aggregated.totalScore} / {totalSuggestedQuota}
+                    {aggregated.actualTotalQuantity} / {aggregated.monthQuotaTotal}
                   </span>
                 </div>
 
@@ -460,7 +486,10 @@ export default function ReportManagementPage() {
                 {regionStats.map((region) => {
                   const width = progressPercent(region.quantity, region.quota);
                   const barColor = getProgressColor(region.quantity, region.quota);
-                  const textColor = getProgressTextColor(region.quantity, region.quota);
+                  const textColor = getProgressTextColor(
+                    region.quantity,
+                    region.quota
+                  );
 
                   return (
                     <div key={region.region_id}>
@@ -523,7 +552,7 @@ export default function ReportManagementPage() {
                           {row.employee_code || "-"}
                         </td>
                         <td className="border-b border-slate-100 px-4 py-3 text-right text-sm font-semibold text-slate-900">
-                          {row.total_score}
+                          {row.total_quantity}
                         </td>
                         <td className="border-b border-slate-100 px-4 py-3 text-center text-sm">
                           <span
