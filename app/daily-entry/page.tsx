@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabase";
 import PageActionButtons from "../components/PageActionButtons";
 
+type Role = "admin" | "staff" | "part_time";
+
 type RegionCategory = {
   id: number;
   region_name_zh: string;
@@ -16,6 +18,16 @@ type DailyEntryRow = {
   id?: number;
   region_id: number;
   quantity: number;
+};
+
+type DailyEntryMonthRow = {
+  region_id: number;
+  quantity: number | null;
+};
+
+type MonthlyRegionRule = {
+  region_id: number;
+  quota: number | null;
 };
 
 type DailyWorkLogRow = {
@@ -46,12 +58,46 @@ type WorkLogForm = {
 type ProfileRow = {
   display_name: string | null;
   employee_code: string | null;
+  role: Role | null;
+};
+
+type RegionQuotaStat = {
+  region_id: number;
+  quota: number;
+  rawMonthTotal: number;
+  savedTodayQty: number;
+  currentInputQty: number;
+  nextMonthTotal: number;
+  remainingBeforeToday: number;
+  isLocked: boolean;
+  isOverLimit: boolean;
 };
 
 function getLocalTodayString() {
   const now = new Date();
   const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
   return local.toISOString().slice(0, 10);
+}
+
+function getMonthBounds(dateString: string) {
+  const base = new Date(`${dateString}T00:00:00`);
+  const year = base.getFullYear();
+  const month = base.getMonth();
+
+  const start = new Date(year, month, 1);
+  const next = new Date(year, month + 1, 1);
+
+  const format = (d: Date) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  };
+
+  return {
+    monthStart: format(start),
+    nextMonthStart: format(next),
+  };
 }
 
 function getEmptyWorkLogForm(): WorkLogForm {
@@ -151,15 +197,25 @@ export default function DailyEntryPage() {
   const [userId, setUserId] = useState<string>("");
   const [displayName, setDisplayName] = useState<string>("");
   const [employeeCode, setEmployeeCode] = useState<string>("");
+  const [role, setRole] = useState<Role>("staff");
 
   const [regions, setRegions] = useState<RegionCategory[]>([]);
   const [selectedDate, setSelectedDate] = useState<string>(getLocalTodayString());
+
   const [quantities, setQuantities] = useState<Record<number, string>>({});
+  const [savedQuantities, setSavedQuantities] = useState<Record<number, string>>({});
+  const [monthlyRuleMap, setMonthlyRuleMap] = useState<Record<number, number>>({});
+  const [monthRegionTotalsRaw, setMonthRegionTotalsRaw] = useState<Record<number, number>>(
+    {}
+  );
+
   const [workLog, setWorkLog] = useState<WorkLogForm>(getEmptyWorkLogForm());
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+
+  const isPartTime = role === "part_time";
 
   const totalQty = useMemo(() => {
     return regions.reduce((sum, region) => {
@@ -183,10 +239,58 @@ export default function DailyEntryPage() {
     return getShiftParts(workLog.working_shift);
   }, [workLog.working_shift]);
 
+  const regionQuotaStats = useMemo<Record<number, RegionQuotaStat>>(() => {
+    const next: Record<number, RegionQuotaStat> = {};
+
+    regions.forEach((region) => {
+      const quota = Number(monthlyRuleMap[region.id] ?? 0);
+      const rawMonthTotal = Number(monthRegionTotalsRaw[region.id] ?? 0);
+      const savedTodayQty = Number(savedQuantities[region.id] ?? 0);
+      const currentInputQty = Number(quantities[region.id] ?? 0);
+
+      const baseWithoutTodaySaved = Math.max(rawMonthTotal - savedTodayQty, 0);
+      const nextMonthTotal = baseWithoutTodaySaved + currentInputQty;
+      const remainingBeforeToday =
+        quota > 0 ? Math.max(quota - baseWithoutTodaySaved, 0) : 0;
+
+      const isLocked =
+        isPartTime && quota > 0 && remainingBeforeToday === 0 && savedTodayQty === 0;
+
+      const isOverLimit = isPartTime && quota > 0 && nextMonthTotal > quota;
+
+      next[region.id] = {
+        region_id: region.id,
+        quota,
+        rawMonthTotal,
+        savedTodayQty,
+        currentInputQty,
+        nextMonthTotal,
+        remainingBeforeToday,
+        isLocked,
+        isOverLimit,
+      };
+    });
+
+    return next;
+  }, [regions, monthlyRuleMap, monthRegionTotalsRaw, savedQuantities, quantities, isPartTime]);
+
+  const hasPartTimeOverLimit = useMemo(() => {
+    if (!isPartTime) return false;
+    return Object.values(regionQuotaStats).some((item) => item.isOverLimit);
+  }, [isPartTime, regionQuotaStats]);
+
   const buildEmptyQuantities = (regionList: RegionCategory[]) => {
     const initial: Record<number, string> = {};
     regionList.forEach((region) => {
       initial[region.id] = "";
+    });
+    return initial;
+  };
+
+  const buildEmptyNumberMap = (regionList: RegionCategory[]) => {
+    const initial: Record<number, number> = {};
+    regionList.forEach((region) => {
+      initial[region.id] = 0;
     });
     return initial;
   };
@@ -214,6 +318,51 @@ export default function DailyEntryPage() {
     });
 
     setQuantities(nextQuantities);
+    setSavedQuantities(nextQuantities);
+  };
+
+  const loadMonthlyQuotaAndTotals = async (
+    currentDate: string,
+    regionList: RegionCategory[]
+  ) => {
+    const { monthStart, nextMonthStart } = getMonthBounds(currentDate);
+
+    const [rulesResult, monthEntriesResult] = await Promise.all([
+      supabase
+        .from("monthly_region_rules")
+        .select("region_id, quota")
+        .eq("rule_month", monthStart),
+      supabase
+        .from("daily_entries")
+        .select("region_id, quantity")
+        .gte("entry_date", monthStart)
+        .lt("entry_date", nextMonthStart),
+    ]);
+
+    if (rulesResult.error) {
+      setMessage(rulesResult.error.message);
+      return;
+    }
+
+    if (monthEntriesResult.error) {
+      setMessage(monthEntriesResult.error.message);
+      return;
+    }
+
+    const nextRuleMap = buildEmptyNumberMap(regionList);
+    const nextMonthTotals = buildEmptyNumberMap(regionList);
+
+    ((rulesResult.data ?? []) as MonthlyRegionRule[]).forEach((row) => {
+      nextRuleMap[row.region_id] = Number(row.quota ?? 0);
+    });
+
+    ((monthEntriesResult.data ?? []) as DailyEntryMonthRow[]).forEach((row) => {
+      nextMonthTotals[row.region_id] =
+        (nextMonthTotals[row.region_id] ?? 0) + Number(row.quantity ?? 0);
+    });
+
+    setMonthlyRuleMap(nextRuleMap);
+    setMonthRegionTotalsRaw(nextMonthTotals);
   };
 
   const loadDailyWorkLog = async (
@@ -283,7 +432,7 @@ export default function DailyEntryPage() {
 
       const { data: profileData, error: profileError } = await supabase
         .from("profiles")
-        .select("display_name, employee_code")
+        .select("display_name, employee_code, role")
         .eq("id", user.id)
         .maybeSingle();
 
@@ -296,9 +445,11 @@ export default function DailyEntryPage() {
       const profile = (profileData ?? null) as ProfileRow | null;
       const resolvedDisplayName = profile?.display_name ?? user.email ?? "User";
       const resolvedEmployeeCode = profile?.employee_code ?? "";
+      const resolvedRole = (profile?.role ?? "staff") as Role;
 
       setDisplayName(resolvedDisplayName);
       setEmployeeCode(resolvedEmployeeCode);
+      setRole(resolvedRole);
 
       const { data: regionData, error: regionError } = await supabase
         .from("region_categories")
@@ -314,9 +465,11 @@ export default function DailyEntryPage() {
       const regionList = (regionData ?? []) as RegionCategory[];
       setRegions(regionList);
       setQuantities(buildEmptyQuantities(regionList));
+      setSavedQuantities(buildEmptyQuantities(regionList));
 
       await Promise.all([
         loadDailyEntries(user.id, selectedDate, regionList),
+        loadMonthlyQuotaAndTotals(selectedDate, regionList),
         loadDailyWorkLog(user.id, selectedDate, resolvedEmployeeCode),
       ]);
 
@@ -341,6 +494,7 @@ export default function DailyEntryPage() {
 
       await Promise.all([
         loadDailyEntries(userId, selectedDate, regions),
+        loadMonthlyQuotaAndTotals(selectedDate, regions),
         loadDailyWorkLog(userId, selectedDate, employeeCode),
       ]);
     };
@@ -349,8 +503,14 @@ export default function DailyEntryPage() {
   }, [userId, selectedDate, regions, employeeCode]);
 
   const handleQuantityChange = (regionId: number, value: string) => {
+    const stat = regionQuotaStats[regionId];
+
     if (value === "") {
       setQuantities((prev) => ({ ...prev, [regionId]: "" }));
+      return;
+    }
+
+    if (isPartTime && stat?.isLocked) {
       return;
     }
 
@@ -399,6 +559,12 @@ export default function DailyEntryPage() {
 
     setSaving(true);
     setMessage("");
+
+    if (isPartTime && hasPartTimeOverLimit) {
+      setMessage("有地區已超過當月份數上限，請先調整後再儲存。");
+      setSaving(false);
+      return;
+    }
 
     const positivePayload = regions
       .map((region) => {
@@ -483,6 +649,7 @@ export default function DailyEntryPage() {
 
     await Promise.all([
       loadDailyEntries(userId, selectedDate, regions),
+      loadMonthlyQuotaAndTotals(selectedDate, regions),
       loadDailyWorkLog(userId, selectedDate, employeeCode),
     ]);
 
@@ -507,6 +674,9 @@ export default function DailyEntryPage() {
           <h1 className="text-2xl font-bold text-slate-900">每日填報</h1>
           <p className="mt-1 text-sm text-slate-600">使用者：{displayName}</p>
           <p className="mt-1 text-sm text-slate-500">請填寫指定日期各地區完成份數</p>
+          <p className="mt-1 text-sm text-slate-500">
+            角色：{role === "part_time" ? "兼職" : role === "admin" ? "管理員" : "全職"}
+          </p>
         </div>
 
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
@@ -724,40 +894,92 @@ export default function DailyEntryPage() {
         <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
           <h2 className="text-lg font-semibold text-slate-900">地區類別填報</h2>
 
-          <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {regions.map((region) => (
-              <div
-                key={region.id}
-                className="rounded-2xl border border-slate-200 p-4"
-              >
-                <div>
-                  <p className="text-sm text-slate-500">序號 {region.sort_order}</p>
-                  <h3 className="mt-1 font-semibold text-slate-900">
-                    {region.region_name_zh}
-                  </h3>
-                  <p className="mt-1 text-xs text-slate-500">
-                    {region.is_non_mainland ? "非內地類別" : "內地類別"}
-                  </p>
-                </div>
+          {isPartTime ? (
+            <div className="mt-3 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-700 ring-1 ring-amber-200">
+              兼職會按每個地區分開計算當月上限；若某地區已達上限，該地區不能再填寫。
+            </div>
+          ) : null}
 
-                <div className="mt-4">
-                  <label className="mb-2 block text-sm font-medium text-slate-700">
-                    今日完成份數
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="1"
-                    placeholder="請輸入份數"
-                    value={quantities[region.id] ?? ""}
-                    onChange={(e) =>
-                      handleQuantityChange(region.id, e.target.value)
-                    }
-                    className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
-                  />
+          <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {regions.map((region) => {
+              const stat = regionQuotaStats[region.id];
+
+              return (
+                <div
+                  key={region.id}
+                  className="rounded-2xl border border-slate-200 p-4"
+                >
+                  <div>
+                    <p className="text-sm text-slate-500">序號 {region.sort_order}</p>
+                    <h3 className="mt-1 font-semibold text-slate-900">
+                      {region.region_name_zh}
+                    </h3>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {region.is_non_mainland ? "非內地類別" : "內地類別"}
+                    </p>
+                  </div>
+
+                  {isPartTime ? (
+                    <div className="mt-4 space-y-1 rounded-xl bg-slate-50 px-3 py-3 text-xs text-slate-600">
+                      <p>
+                        本月累計（含目前輸入）：{" "}
+                        <span className="font-semibold text-slate-900">
+                          {stat?.nextMonthTotal ?? 0}
+                        </span>
+                      </p>
+                      <p>
+                        建議配額：{" "}
+                        <span className="font-semibold text-slate-900">
+                          {stat?.quota ?? 0}
+                        </span>
+                      </p>
+                      <p>
+                        尚餘可填：{" "}
+                        <span className="font-semibold text-slate-900">
+                          {stat?.quota > 0
+                            ? Math.max((stat?.quota ?? 0) - (stat?.nextMonthTotal ?? 0), 0)
+                            : 0}
+                        </span>
+                      </p>
+                    </div>
+                  ) : null}
+
+                  <div className="mt-4">
+                    <label className="mb-2 block text-sm font-medium text-slate-700">
+                      今日完成份數
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      placeholder="請輸入份數"
+                      value={quantities[region.id] ?? ""}
+                      onChange={(e) =>
+                        handleQuantityChange(region.id, e.target.value)
+                      }
+                      disabled={Boolean(isPartTime && stat?.isLocked)}
+                      className={`w-full rounded-xl border px-4 py-3 outline-none ${
+                        isPartTime && stat?.isLocked
+                          ? "border-red-200 bg-red-50 text-red-500"
+                          : "border-slate-300 focus:border-slate-500"
+                      }`}
+                    />
+
+                    {isPartTime && stat?.isLocked ? (
+                      <p className="mt-2 text-xs font-medium text-red-600">
+                        已達份數上限，不能再填寫。
+                      </p>
+                    ) : null}
+
+                    {isPartTime && stat?.isOverLimit ? (
+                      <p className="mt-2 text-xs font-medium text-red-600">
+                        已超過此地區當月份數上限，請調整。
+                      </p>
+                    ) : null}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           {message ? (
@@ -769,7 +991,7 @@ export default function DailyEntryPage() {
           <div className="mt-6">
             <button
               onClick={handleSave}
-              disabled={saving}
+              disabled={saving || hasPartTimeOverLimit}
               className="rounded-xl bg-slate-900 px-6 py-3 font-medium text-white hover:bg-slate-800 disabled:opacity-50"
             >
               {saving ? "儲存中..." : "儲存今日填報"}
