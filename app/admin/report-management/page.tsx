@@ -31,6 +31,7 @@ type RegionLite = {
   id: number;
   region_name_zh: string | null;
   sort_order: number | null;
+  quota: number | null;
 };
 
 type SummaryRow = {
@@ -38,6 +39,7 @@ type SummaryRow = {
   display_name: string | null;
   employee_code: string | null;
   total_quantity: number;
+  total_score: number;
   achievement_status: AchievementStatus;
 };
 
@@ -45,15 +47,39 @@ type RegionStat = {
   region_id: number;
   region_name_zh: string;
   quantity: number;
+  quota: number;
   sort_order: number;
 };
 
-const MONTH_TOTAL_TARGET = 2500;
 const STAFF_TARGET = 400;
 
 function progressPercent(value: number, target: number) {
   if (target <= 0) return 0;
   return Math.min((value / target) * 100, 100);
+}
+
+function getProgressColor(value: number, target: number) {
+  if (target > 0 && value >= target) {
+    return "bg-red-600";
+  }
+  return "bg-green-600";
+}
+
+function getProgressTextColor(value: number, target: number) {
+  if (target > 0 && value >= target) {
+    return "text-red-700";
+  }
+  return "text-green-700";
+}
+
+function getStatusBadgeClass(status: AchievementStatus) {
+  if (status === "達標") {
+    return "bg-red-50 text-red-700 ring-1 ring-red-200";
+  }
+  if (status === "未達標") {
+    return "bg-green-50 text-green-700 ring-1 ring-green-200";
+  }
+  return "bg-slate-100 text-slate-600 ring-1 ring-slate-200";
 }
 
 export default function ReportManagementPage() {
@@ -126,7 +152,7 @@ export default function ReportManagementPage() {
           .lt("entry_date", nextMonthStart),
         supabase
           .from("region_categories")
-          .select("id, region_name_zh, sort_order")
+          .select("id, region_name_zh, sort_order, quota")
           .order("sort_order", { ascending: true }),
       ]);
 
@@ -183,6 +209,7 @@ export default function ReportManagementPage() {
       const mergedRows: SummaryRow[] = staffProfiles
         .map((profile) => {
           const totalQuantity = entriesByUser.get(profile.id) ?? 0;
+          const totalScore = totalQuantity;
 
           let achievementStatus: AchievementStatus = "未填報";
 
@@ -195,6 +222,7 @@ export default function ReportManagementPage() {
             display_name: profile.display_name ?? null,
             employee_code: profile.employee_code ?? null,
             total_quantity: totalQuantity,
+            total_score: totalScore,
             achievement_status: achievementStatus,
           };
         })
@@ -210,6 +238,7 @@ export default function ReportManagementPage() {
             region_id: region.id,
             region_name_zh: region.region_name_zh ?? `地區 ${region.id}`,
             quantity,
+            quota: Number(region.quota ?? 0),
             sort_order: region.sort_order ?? 9999,
           };
         })
@@ -229,6 +258,7 @@ export default function ReportManagementPage() {
 
   const aggregated = useMemo(() => {
     const totalQuantity = rows.reduce((sum, row) => sum + row.total_quantity, 0);
+    const totalScore = rows.reduce((sum, row) => sum + row.total_score, 0);
 
     const achievedCount = rows.filter(
       (row) => row.achievement_status === "達標"
@@ -256,6 +286,7 @@ export default function ReportManagementPage() {
 
     return {
       totalQuantity,
+      totalScore,
       achievedCount,
       notAchievedCount,
       notFilledCount,
@@ -263,10 +294,17 @@ export default function ReportManagementPage() {
     };
   }, [rows]);
 
-  const maxRegionQuantity = useMemo(() => {
-    if (regionStats.length === 0) return 0;
-    return Math.max(...regionStats.map((region) => region.quantity), 0);
+  const totalSuggestedQuota = useMemo(() => {
+    return regionStats.reduce((sum, region) => sum + Number(region.quota ?? 0), 0);
   }, [regionStats]);
+
+  const totalProgressPercent = useMemo(() => {
+    return progressPercent(aggregated.totalScore, totalSuggestedQuota);
+  }, [aggregated.totalScore, totalSuggestedQuota]);
+
+  const totalProgressColor = useMemo(() => {
+    return getProgressColor(aggregated.totalScore, totalSuggestedQuota);
+  }, [aggregated.totalScore, totalSuggestedQuota]);
 
   if (loading) {
     return (
@@ -351,9 +389,9 @@ export default function ReportManagementPage() {
 
             <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
               <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <p className="text-sm text-slate-500">本月總份數</p>
+                <p className="text-sm text-slate-500">本月總分</p>
                 <p className="mt-2 text-3xl font-bold text-slate-900">
-                  {aggregated.totalQuantity}
+                  {aggregated.totalScore}
                 </p>
               </div>
 
@@ -380,23 +418,25 @@ export default function ReportManagementPage() {
             </section>
 
             <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-              <h2 className="text-xl font-semibold text-slate-900">達標進度</h2>
+              <h2 className="text-xl font-semibold text-slate-900">總達標進度</h2>
 
               <div className="mt-6">
-                <div className="mb-2 flex items-center justify-between text-sm text-slate-700">
-                  <span>總份數（目標 {MONTH_TOTAL_TARGET}）</span>
-                  <span>{aggregated.totalQuantity} / {MONTH_TOTAL_TARGET}</span>
+                <div className="mb-2 flex items-center justify-between text-sm">
+                  <span className="text-slate-700">總分 / 建議配額總和</span>
+                  <span
+                    className={`font-semibold ${getProgressTextColor(
+                      aggregated.totalScore,
+                      totalSuggestedQuota
+                    )}`}
+                  >
+                    {aggregated.totalScore} / {totalSuggestedQuota}
+                  </span>
                 </div>
 
                 <div className="h-3 w-full rounded-full bg-slate-200">
                   <div
-                    className="h-3 rounded-full bg-green-600 transition-all"
-                    style={{
-                      width: `${progressPercent(
-                        aggregated.totalQuantity,
-                        MONTH_TOTAL_TARGET
-                      )}%`,
-                    }}
+                    className={`h-3 rounded-full transition-all ${totalProgressColor}`}
+                    style={{ width: `${totalProgressPercent}%` }}
                   />
                 </div>
               </div>
@@ -406,31 +446,98 @@ export default function ReportManagementPage() {
               <h2 className="text-xl font-semibold text-slate-900">地區統計</h2>
 
               <div className="mt-6 space-y-5">
-                {regionStats.map((region) => (
-                  <div key={region.region_id}>
-                    <div className="mb-2 flex items-center justify-between gap-4 text-sm">
-                      <span className="font-medium text-slate-800">
-                        {region.region_name_zh}
-                      </span>
-                      <span className="font-semibold text-slate-700">
-                        {region.quantity}
-                      </span>
-                    </div>
+                {regionStats.map((region) => {
+                  const width = progressPercent(region.quantity, region.quota);
+                  const barColor = getProgressColor(region.quantity, region.quota);
+                  const textColor = getProgressTextColor(region.quantity, region.quota);
 
-                    <div className="h-3 w-full rounded-full bg-slate-200">
-                      <div
-                        className="h-3 rounded-full bg-green-600 transition-all"
-                        style={{
-                          width: `${
-                            maxRegionQuantity > 0
-                              ? progressPercent(region.quantity, maxRegionQuantity)
-                              : 0
-                          }%`,
-                        }}
-                      />
+                  return (
+                    <div key={region.region_id}>
+                      <div className="mb-2 flex items-center justify-between gap-4 text-sm">
+                        <span className="font-medium text-slate-800">
+                          {region.region_name_zh}
+                        </span>
+                        <span className={`font-semibold ${textColor}`}>
+                          {region.quantity} / {region.quota}
+                        </span>
+                      </div>
+
+                      <div className="h-3 w-full rounded-full bg-slate-200">
+                        <div
+                          className={`h-3 rounded-full transition-all ${barColor}`}
+                          style={{ width: `${width}%` }}
+                        />
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
+
+                {regionStats.length === 0 && (
+                  <div className="text-sm text-slate-500">本月暫無地區資料</div>
+                )}
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="text-xl font-semibold text-slate-900">員工統計</h2>
+                <span className="text-sm text-slate-500">達標標準：400分</span>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="min-w-full border-separate border-spacing-0">
+                  <thead>
+                    <tr>
+                      <th className="border-b border-slate-200 px-4 py-3 text-left text-sm font-semibold text-slate-700">
+                        員工
+                      </th>
+                      <th className="border-b border-slate-200 px-4 py-3 text-left text-sm font-semibold text-slate-700">
+                        員工編號
+                      </th>
+                      <th className="border-b border-slate-200 px-4 py-3 text-right text-sm font-semibold text-slate-700">
+                        總分
+                      </th>
+                      <th className="border-b border-slate-200 px-4 py-3 text-center text-sm font-semibold text-slate-700">
+                        狀態
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((row) => (
+                      <tr key={row.user_id}>
+                        <td className="border-b border-slate-100 px-4 py-3 text-sm text-slate-800">
+                          {row.display_name || "-"}
+                        </td>
+                        <td className="border-b border-slate-100 px-4 py-3 text-sm text-slate-600">
+                          {row.employee_code || "-"}
+                        </td>
+                        <td className="border-b border-slate-100 px-4 py-3 text-right text-sm font-semibold text-slate-900">
+                          {row.total_score}
+                        </td>
+                        <td className="border-b border-slate-100 px-4 py-3 text-center text-sm">
+                          <span
+                            className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${getStatusBadgeClass(
+                              row.achievement_status
+                            )}`}
+                          >
+                            {row.achievement_status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+
+                    {rows.length === 0 && (
+                      <tr>
+                        <td
+                          colSpan={4}
+                          className="px-4 py-8 text-center text-sm text-slate-500"
+                        >
+                          本月暫無員工資料
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
               </div>
             </section>
 
