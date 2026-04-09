@@ -31,7 +31,9 @@ type RegionLite = {
   id: number;
   region_name_zh: string | null;
   sort_order: number | null;
-  quota: number | null;
+  quota?: number | null;
+  suggested_quota?: number | null;
+  recommended_quota?: number | null;
 };
 
 type SummaryRow = {
@@ -152,7 +154,7 @@ export default function ReportManagementPage() {
           .lt("entry_date", nextMonthStart),
         supabase
           .from("region_categories")
-          .select("id, region_name_zh, sort_order, quota")
+          .select("*")
           .order("sort_order", { ascending: true }),
       ]);
 
@@ -181,6 +183,8 @@ export default function ReportManagementPage() {
         setLoading(false);
         return;
       }
+
+      console.log("regionsData", regionsData);
 
       const staffProfiles = ((profilesData ?? []) as ProfileLite[]).filter(
         (profile) => profile.role === "staff"
@@ -234,11 +238,18 @@ export default function ReportManagementPage() {
         .map((region) => {
           const quantity = entriesByRegion.get(region.id) ?? 0;
 
+          const quotaValue = Number(
+            region.quota ??
+              region.suggested_quota ??
+              region.recommended_quota ??
+              0
+          );
+
           return {
             region_id: region.id,
             region_name_zh: region.region_name_zh ?? `地區 ${region.id}`,
             quantity,
-            quota: Number(region.quota ?? 0),
+            quota: quotaValue,
             sort_order: region.sort_order ?? 9999,
           };
         })
