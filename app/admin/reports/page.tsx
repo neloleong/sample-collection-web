@@ -14,11 +14,14 @@ import {
   monthLabel,
 } from "@/lib/month";
 
+type Role = "admin" | "staff" | "part_time";
+type AchievementStatus = "達標" | "未達標" | "未填報" | "不計分";
+
 type Profile = {
   id: string;
   display_name: string | null;
   employee_code: string | null;
-  role: "admin" | "staff";
+  role: Role;
   created_at?: string | null;
 };
 
@@ -59,19 +62,22 @@ type EmployeeSummaryRow = {
   id: string;
   display_name: string | null;
   employee_code: string | null;
-  role: "admin" | "staff";
+  role: Role;
   created_at: string | null;
   total_quantity: number;
   non_mainland_qty: number;
   raw_score: number;
   adjusted_score: number;
   last_entry_date: string | null;
-  achievement_status: "達標" | "未達標" | "未填報";
+  achievement_status: AchievementStatus;
 };
 
-function normalizeRole(role: unknown): "admin" | "staff" {
+function normalizeRole(role: unknown): Role {
   const r = String(role ?? "").toLowerCase().trim();
-  return r === "admin" ? "admin" : "staff";
+
+  if (r === "admin") return "admin";
+  if (r === "part_time") return "part_time";
+  return "staff";
 }
 
 function formatDate(value: string | null) {
@@ -213,12 +219,20 @@ function computeEmployeeSummary(params: {
     }
   }
 
-  const achievementStatus: "達標" | "未達標" | "未填報" =
-    totalQuantity <= 0
-      ? "未填報"
-      : totalQuantity >= 400 && nonMainlandQty >= 100 && adjustedScore >= 420
-      ? "達標"
-      : "未達標";
+  let achievementStatus: AchievementStatus;
+
+  if (profile.role === "part_time") {
+    achievementStatus = "不計分";
+    rawScore = 0;
+    adjustedScore = 0;
+  } else {
+    achievementStatus =
+      totalQuantity <= 0
+        ? "未填報"
+        : totalQuantity >= 400 && nonMainlandQty >= 100 && adjustedScore >= 420
+        ? "達標"
+        : "未達標";
+  }
 
   return {
     id: profile.id,
@@ -233,6 +247,40 @@ function computeEmployeeSummary(params: {
     last_entry_date: lastEntryDate,
     achievement_status: achievementStatus,
   };
+}
+
+function getRoleBadgeClass(role: Role) {
+  if (role === "admin") {
+    return "bg-red-100 text-red-700";
+  }
+
+  if (role === "part_time") {
+    return "bg-amber-100 text-amber-700";
+  }
+
+  return "bg-blue-100 text-blue-700";
+}
+
+function getRoleLabel(role: Role) {
+  if (role === "admin") return "ADMIN";
+  if (role === "part_time") return "PART-TIME";
+  return "STAFF";
+}
+
+function getAchievementBadgeClass(status: AchievementStatus) {
+  if (status === "達標") {
+    return "bg-green-100 text-green-700";
+  }
+
+  if (status === "未達標") {
+    return "bg-amber-100 text-amber-700";
+  }
+
+  if (status === "不計分") {
+    return "bg-purple-100 text-purple-700";
+  }
+
+  return "bg-slate-100 text-slate-600";
 }
 
 export default function AdminReportsPage() {
@@ -433,6 +481,8 @@ export default function AdminReportsPage() {
           ? row.achievement_status === "未達標"
           : achievementFilter === "not_filled"
           ? row.achievement_status === "未填報"
+          : achievementFilter === "not_scored"
+          ? row.achievement_status === "不計分"
           : true;
 
       if (!matchAchievement) return false;
@@ -464,8 +514,6 @@ export default function AdminReportsPage() {
   return (
     <main className="min-h-screen bg-slate-50 px-6 py-10">
       <div className="mx-auto max-w-7xl space-y-6">
-        
-
         <div className="flex flex-wrap items-center gap-3 text-sm text-slate-600">
           <span className="rounded-full bg-blue-50 px-3 py-1 text-blue-700">
             管理員：{displayName}
@@ -479,8 +527,8 @@ export default function AdminReportsPage() {
         </div>
 
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                            <PageActionButtons />
-        </div>  
+          <PageActionButtons />
+        </div>
 
         <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
           <div className="grid gap-4 md:grid-cols-5">
@@ -550,6 +598,7 @@ export default function AdminReportsPage() {
                 <option value="achieved">達標</option>
                 <option value="not_achieved">未達標</option>
                 <option value="not_filled">未填報</option>
+                <option value="not_scored">不計分</option>
               </select>
             </label>
 
@@ -612,25 +661,19 @@ export default function AdminReportsPage() {
 
                       <td className="px-3 py-3">
                         <span
-                          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
-                            row.role === "admin"
-                              ? "bg-red-100 text-red-700"
-                              : "bg-blue-100 text-blue-700"
-                          }`}
+                          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${getRoleBadgeClass(
+                            row.role
+                          )}`}
                         >
-                          {row.role === "admin" ? "ADMIN" : "STAFF"}
+                          {getRoleLabel(row.role)}
                         </span>
                       </td>
 
                       <td className="px-3 py-3">
                         <span
-                          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
-                            row.achievement_status === "達標"
-                              ? "bg-green-100 text-green-700"
-                              : row.achievement_status === "未達標"
-                              ? "bg-amber-100 text-amber-700"
-                              : "bg-slate-100 text-slate-600"
-                          }`}
+                          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${getAchievementBadgeClass(
+                            row.achievement_status
+                          )}`}
                         >
                           {row.achievement_status}
                         </span>
@@ -645,7 +688,7 @@ export default function AdminReportsPage() {
                       </td>
 
                       <td className="px-3 py-3 font-medium text-slate-900">
-                        {row.adjusted_score}
+                        {row.role === "part_time" ? "-" : row.adjusted_score}
                       </td>
 
                       <td className="px-3 py-3">{formatDate(row.last_entry_date)}</td>
@@ -661,8 +704,8 @@ export default function AdminReportsPage() {
             <p>說明：</p>
             <p className="mt-2">1. 此頁只供 admin 查看全部員工當月彙總資料。</p>
             <p>2. 此頁以員工為單位，每位員工只顯示一行，不再按每日或地區拆開。</p>
-            <p>3. 達標條件：本月總份數達 400、非內地份數達 100、調整後分數達 420。</p>
-            <p>4. 若員工當月完全未填報，則顯示為「未填報」。</p>
+            <p>3. staff 達標條件：本月總份數達 400、非內地份數達 100、調整後分數達 420。</p>
+            <p>4. part_time 只計份數，不計分數，狀態顯示為「不計分」。</p>
             <p>5. 點擊員工名稱，可直接進入該員工該月份的過往記錄。</p>
           </div>
 

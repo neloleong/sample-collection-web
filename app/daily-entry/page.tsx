@@ -18,21 +18,145 @@ type DailyEntryRow = {
   quantity: number;
 };
 
+type DailyWorkLogRow = {
+  id?: number;
+  user_id?: string;
+  work_date: string;
+  interviewer_id: string | null;
+  survey_location: string | null;
+  working_shift: string | null;
+  abnormal_case_count: number | null;
+  abnormal_included_in_completed: boolean | null;
+  issue_types: string[] | null;
+  estimated_footfall: string | null;
+  issues_and_suggestions: string | null;
+};
+
+type WorkLogForm = {
+  interviewer_id: string;
+  survey_location: string;
+  working_shift: string;
+  abnormal_case_count: string;
+  abnormal_included_in_completed: "" | "yes" | "no";
+  issue_types: string[];
+  estimated_footfall: string;
+  issues_and_suggestions: string;
+};
+
+type ProfileRow = {
+  display_name: string | null;
+  employee_code: string | null;
+};
+
 function getLocalTodayString() {
   const now = new Date();
   const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
   return local.toISOString().slice(0, 10);
 }
 
+function getEmptyWorkLogForm(): WorkLogForm {
+  return {
+    interviewer_id: "",
+    survey_location: "",
+    working_shift: "",
+    abnormal_case_count: "",
+    abnormal_included_in_completed: "",
+    issue_types: [],
+    estimated_footfall: "",
+    issues_and_suggestions: "",
+  };
+}
+
+function getShiftParts(value: string) {
+  if (!value || !value.includes("-")) {
+    return { start: "", end: "" };
+  }
+
+  const [start, end] = value.split("-");
+  return {
+    start: start ?? "",
+    end: end ?? "",
+  };
+}
+
+function buildShiftValue(start: string, end: string) {
+  if (!start || !end) return "";
+  return `${start}-${end}`;
+}
+
+const SURVEY_LOCATION_OPTIONS = [
+  { value: "outer_harbour", label: "外港碼頭 Outer Harbour" },
+  { value: "taipa_ferry_terminal", label: "氹仔客運碼頭（北安） Taipa Ferry Terminal" },
+  { value: "border_gate", label: "關閘 Border Gate" },
+  { value: "hkzm_bridge", label: "港珠澳大橋 HK-Zhuhai-Macao Bridge" },
+  { value: "hengqin_port", label: "橫琴口岸 Hengqin Port" },
+  { value: "macau_airport", label: "澳門國際機場 Macau International Airport" },
+  { value: "qingmao_port", label: "青茂口岸 Qingmao Port" },
+  { value: "inner_harbor_ferry_terminal", label: "内港客運碼頭 Inner Harbor Ferry Terminal" },
+];
+
+const ISSUE_TYPE_OPTIONS = [
+  {
+    value: "questionnaire_misunderstanding",
+    label: "問卷理解問題 Questionnaire misunderstanding",
+  },
+  {
+    value: "system_device_issue",
+    label: "系統或設備問題 System or device issue",
+  },
+  {
+    value: "visitor_reaction",
+    label: "訪客反應或情緒 Visitor reaction or concern",
+  },
+  {
+    value: "refusal_early_termination",
+    label: "拒答或中途退出 Refusal or early termination",
+  },
+  {
+    value: "field_environment_issue",
+    label: "現場環境影響 Field environment issue",
+  },
+  {
+    value: "other",
+    label: "其他 Other",
+  },
+];
+
+const FOOTFALL_OPTIONS = [
+  {
+    value: "almost_no_flow",
+    label: "幾乎無人流，訪問困難 Almost no passenger flow",
+  },
+  {
+    value: "light_flow",
+    label: "零星人流，訪問需主動尋找受訪者 Light passenger flow",
+  },
+  {
+    value: "normal_flow",
+    label: "持續有人流，訪問較順暢 Normal passenger flow",
+  },
+  {
+    value: "heavy_flow",
+    label: "人流密集，需挑選合適受訪者 Heavy passenger flow",
+  },
+  {
+    value: "peak_congested",
+    label: "高峰時段，現場較擠迫 Peak period / Congested",
+  },
+];
+
 export default function DailyEntryPage() {
   const router = useRouter();
 
   const [userId, setUserId] = useState<string>("");
   const [displayName, setDisplayName] = useState<string>("");
+  const [employeeCode, setEmployeeCode] = useState<string>("");
 
   const [regions, setRegions] = useState<RegionCategory[]>([]);
   const [selectedDate, setSelectedDate] = useState<string>(getLocalTodayString());
   const [quantities, setQuantities] = useState<Record<number, string>>({});
+  const [workLog, setWorkLog] = useState<WorkLogForm>(getEmptyWorkLogForm());
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -54,6 +178,10 @@ export default function DailyEntryPage() {
         return sum + (Number.isNaN(value) ? 0 : value);
       }, 0);
   }, [regions, quantities]);
+
+  const shiftParts = useMemo(() => {
+    return getShiftParts(workLog.working_shift);
+  }, [workLog.working_shift]);
 
   const buildEmptyQuantities = (regionList: RegionCategory[]) => {
     const initial: Record<number, string> = {};
@@ -88,9 +216,59 @@ export default function DailyEntryPage() {
     setQuantities(nextQuantities);
   };
 
+  const loadDailyWorkLog = async (
+    currentUserId: string,
+    currentDate: string,
+    currentEmployeeCode: string
+  ) => {
+    const { data, error } = await supabase
+      .from("daily_work_logs")
+      .select(
+        "work_date, interviewer_id, survey_location, working_shift, abnormal_case_count, abnormal_included_in_completed, issue_types, estimated_footfall, issues_and_suggestions"
+      )
+      .eq("user_id", currentUserId)
+      .eq("work_date", currentDate)
+      .maybeSingle();
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
+    const row = (data ?? null) as DailyWorkLogRow | null;
+
+    if (!row) {
+      setWorkLog({
+        ...getEmptyWorkLogForm(),
+        interviewer_id: currentEmployeeCode,
+      });
+      return;
+    }
+
+    setWorkLog({
+      interviewer_id: currentEmployeeCode,
+      survey_location: row.survey_location ?? "",
+      working_shift: row.working_shift ?? "",
+      abnormal_case_count:
+        row.abnormal_case_count === null || row.abnormal_case_count === undefined
+          ? ""
+          : String(row.abnormal_case_count),
+      abnormal_included_in_completed:
+        row.abnormal_included_in_completed === true
+          ? "yes"
+          : row.abnormal_included_in_completed === false
+          ? "no"
+          : "",
+      issue_types: row.issue_types ?? [],
+      estimated_footfall: row.estimated_footfall ?? "",
+      issues_and_suggestions: row.issues_and_suggestions ?? "",
+    });
+  };
+
   useEffect(() => {
     const init = async () => {
       setLoading(true);
+      setMessage("");
 
       const {
         data: { user },
@@ -103,13 +281,24 @@ export default function DailyEntryPage() {
 
       setUserId(user.id);
 
-      const { data: profileData } = await supabase
+      const { data: profileData, error: profileError } = await supabase
         .from("profiles")
-        .select("display_name")
+        .select("display_name, employee_code")
         .eq("id", user.id)
         .maybeSingle();
 
-      setDisplayName(profileData?.display_name ?? user.email ?? "User");
+      if (profileError) {
+        setMessage(profileError.message);
+        setLoading(false);
+        return;
+      }
+
+      const profile = (profileData ?? null) as ProfileRow | null;
+      const resolvedDisplayName = profile?.display_name ?? user.email ?? "User";
+      const resolvedEmployeeCode = profile?.employee_code ?? "";
+
+      setDisplayName(resolvedDisplayName);
+      setEmployeeCode(resolvedEmployeeCode);
 
       const { data: regionData, error: regionError } = await supabase
         .from("region_categories")
@@ -126,7 +315,10 @@ export default function DailyEntryPage() {
       setRegions(regionList);
       setQuantities(buildEmptyQuantities(regionList));
 
-      await loadDailyEntries(user.id, selectedDate, regionList);
+      await Promise.all([
+        loadDailyEntries(user.id, selectedDate, regionList),
+        loadDailyWorkLog(user.id, selectedDate, resolvedEmployeeCode),
+      ]);
 
       setLoading(false);
     };
@@ -135,13 +327,26 @@ export default function DailyEntryPage() {
   }, [router]);
 
   useEffect(() => {
+    if (!employeeCode) return;
+
+    setWorkLog((prev) => ({
+      ...prev,
+      interviewer_id: employeeCode,
+    }));
+  }, [employeeCode]);
+
+  useEffect(() => {
     const reloadByDate = async () => {
       if (!userId || regions.length === 0) return;
-      await loadDailyEntries(userId, selectedDate, regions);
+
+      await Promise.all([
+        loadDailyEntries(userId, selectedDate, regions),
+        loadDailyWorkLog(userId, selectedDate, employeeCode),
+      ]);
     };
 
     void reloadByDate();
-  }, [userId, selectedDate, regions]);
+  }, [userId, selectedDate, regions, employeeCode]);
 
   const handleQuantityChange = (regionId: number, value: string) => {
     if (value === "") {
@@ -156,6 +361,37 @@ export default function DailyEntryPage() {
     }
 
     setQuantities((prev) => ({ ...prev, [regionId]: value }));
+  };
+
+  const updateWorkLogField = <K extends keyof WorkLogForm>(
+    field: K,
+    value: WorkLogForm[K]
+  ) => {
+    setWorkLog((prev) => ({
+      ...prev,
+      [field]: value,
+    }));
+  };
+
+  const toggleIssueType = (value: string) => {
+    setWorkLog((prev) => {
+      const exists = prev.issue_types.includes(value);
+      return {
+        ...prev,
+        issue_types: exists
+          ? prev.issue_types.filter((item) => item !== value)
+          : [...prev.issue_types, value],
+      };
+    });
+  };
+
+  const updateWorkingShiftPart = (part: "start" | "end", value: string) => {
+    const current = getShiftParts(workLog.working_shift);
+
+    const nextStart = part === "start" ? value : current.start;
+    const nextEnd = part === "end" ? value : current.end;
+
+    updateWorkLogField("working_shift", buildShiftValue(nextStart, nextEnd));
   };
 
   const handleSave = async () => {
@@ -214,8 +450,43 @@ export default function DailyEntryPage() {
       }
     }
 
-    await loadDailyEntries(userId, selectedDate, regions);
-    setMessage("已成功儲存每日填報。");
+    const workLogPayload = {
+      user_id: userId,
+      work_date: selectedDate,
+      interviewer_id: workLog.interviewer_id || null,
+      survey_location: workLog.survey_location || null,
+      working_shift: workLog.working_shift || null,
+      abnormal_case_count:
+        workLog.abnormal_case_count === ""
+          ? 0
+          : Math.max(0, Number(workLog.abnormal_case_count) || 0),
+      abnormal_included_in_completed:
+        workLog.abnormal_included_in_completed === "yes"
+          ? true
+          : workLog.abnormal_included_in_completed === "no"
+          ? false
+          : null,
+      issue_types: workLog.issue_types,
+      estimated_footfall: workLog.estimated_footfall || null,
+      issues_and_suggestions: workLog.issues_and_suggestions || null,
+    };
+
+    const { error: workLogError } = await supabase
+      .from("daily_work_logs")
+      .upsert(workLogPayload, { onConflict: "user_id,work_date" });
+
+    if (workLogError) {
+      setMessage(workLogError.message);
+      setSaving(false);
+      return;
+    }
+
+    await Promise.all([
+      loadDailyEntries(userId, selectedDate, regions),
+      loadDailyWorkLog(userId, selectedDate, employeeCode),
+    ]);
+
+    setMessage("已成功儲存每日填報及現場工作記錄。");
     setSaving(false);
   };
 
@@ -232,15 +503,15 @@ export default function DailyEntryPage() {
   return (
     <main className="min-h-screen bg-slate-50 px-6 py-10">
       <div className="mx-auto max-w-6xl space-y-6">
-        
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900">每日填報</h1>
-            <p className="mt-1 text-sm text-slate-600">使用者：{displayName}</p>
-            <p className="mt-1 text-sm text-slate-500">請填寫指定日期各地區完成份數</p>
-          </div>
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">每日填報</h1>
+          <p className="mt-1 text-sm text-slate-600">使用者：{displayName}</p>
+          <p className="mt-1 text-sm text-slate-500">請填寫指定日期各地區完成份數</p>
+        </div>
+
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                    <PageActionButtons />
-        </div>  
+          <PageActionButtons />
+        </div>
 
         <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
           <div className="grid gap-4 md:grid-cols-3">
@@ -266,6 +537,186 @@ export default function DailyEntryPage() {
               <p className="mt-2 text-2xl font-bold text-slate-900">
                 {nonMainlandQty}
               </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+          <h2 className="text-lg font-semibold text-slate-900">
+            現場工作記錄問卷（調查員填寫）
+          </h2>
+          <p className="mt-1 text-sm text-slate-600">
+            請調查員通過此記錄，多謝合作！如有任何意見，請跟管理員反映。
+          </p>
+          <p className="mt-1 text-sm text-slate-500">
+            Please complete this record accordingly. Thank you for your cooperation.
+            If you have any comments or suggestions, please contact the administrator.
+          </p>
+
+          <div className="mt-6 grid gap-4 md:grid-cols-2">
+            <div>
+              <label className="mb-2 block text-sm font-medium text-slate-700">
+                1. 訪問員編號 Interviewer ID
+              </label>
+              <input
+                type="text"
+                value={workLog.interviewer_id}
+                readOnly
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-slate-600 outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="mb-2 block text-sm font-medium text-slate-700">
+                2. 日期 Date
+              </label>
+              <input
+                type="date"
+                value={selectedDate}
+                readOnly
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-slate-500 outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="mb-2 block text-sm font-medium text-slate-700">
+                3. 工作口岸 Survey Location
+              </label>
+              <select
+                value={workLog.survey_location}
+                onChange={(e) => updateWorkLogField("survey_location", e.target.value)}
+                className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
+              >
+                <option value="">請選擇工作口岸</option>
+                {SURVEY_LOCATION_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="mb-2 block text-sm font-medium text-slate-700">
+                4. 工作時段 Working Shift
+              </label>
+
+              <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
+                <input
+                  type="time"
+                  value={shiftParts.start}
+                  onChange={(e) => updateWorkingShiftPart("start", e.target.value)}
+                  className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
+                />
+
+                <span className="text-sm text-slate-500">至</span>
+
+                <input
+                  type="time"
+                  value={shiftParts.end}
+                  onChange={(e) => updateWorkingShiftPart("end", e.target.value)}
+                  className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
+                />
+              </div>
+
+              <p className="mt-2 text-xs text-slate-500">
+                已選時段：{workLog.working_shift || "未選擇"}
+              </p>
+            </div>
+
+            <div>
+              <label className="mb-2 block text-sm font-medium text-slate-700">
+                5. 異常樣本數量 Number of abnormal cases
+              </label>
+              <input
+                type="number"
+                min="0"
+                step="1"
+                value={workLog.abnormal_case_count}
+                onChange={(e) =>
+                  updateWorkLogField("abnormal_case_count", e.target.value)
+                }
+                className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
+              />
+            </div>
+
+            <div>
+              <label className="mb-2 block text-sm font-medium text-slate-700">
+                6. 異常樣本是否包括在完成份數內？
+              </label>
+              <select
+                value={workLog.abnormal_included_in_completed}
+                onChange={(e) =>
+                  updateWorkLogField(
+                    "abnormal_included_in_completed",
+                    e.target.value as "" | "yes" | "no"
+                  )
+                }
+                className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
+              >
+                <option value="">請選擇</option>
+                <option value="yes">是 Yes</option>
+                <option value="no">否 No</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="mt-6">
+            <label className="mb-3 block text-sm font-medium text-slate-700">
+              7. 異常類型 Type of issue
+            </label>
+            <div className="grid gap-3 md:grid-cols-2">
+              {ISSUE_TYPE_OPTIONS.map((option) => (
+                <label
+                  key={option.value}
+                  className="flex items-start gap-3 rounded-xl border border-slate-200 px-4 py-3"
+                >
+                  <input
+                    type="checkbox"
+                    checked={workLog.issue_types.includes(option.value)}
+                    onChange={() => toggleIssueType(option.value)}
+                    className="mt-1"
+                  />
+                  <span className="text-sm text-slate-700">{option.label}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-6 grid gap-4 md:grid-cols-1">
+            <div>
+              <label className="mb-2 block text-sm font-medium text-slate-700">
+                8. 今日口岸預估人流量 Estimated footfall at the location today
+              </label>
+              <select
+                value={workLog.estimated_footfall}
+                onChange={(e) =>
+                  updateWorkLogField("estimated_footfall", e.target.value)
+                }
+                className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
+              >
+                <option value="">請選擇預估人流量</option>
+                {FOOTFALL_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="mb-2 block text-sm font-medium text-slate-700">
+                9. 問卷期間發現的問題及建議
+              </label>
+              <textarea
+                rows={5}
+                placeholder="請填寫今日現場發現的問題及建議"
+                value={workLog.issues_and_suggestions}
+                onChange={(e) =>
+                  updateWorkLogField("issues_and_suggestions", e.target.value)
+                }
+                className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
+              />
             </div>
           </div>
         </div>

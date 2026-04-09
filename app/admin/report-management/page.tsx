@@ -11,13 +11,14 @@ import {
   getYearOptions,
 } from "../../../lib/month";
 
+type UserRole = "admin" | "staff" | "part_time" | null;
 type AchievementStatus = "未填報" | "未達標" | "達標";
 
 type ProfileLite = {
   id: string;
   display_name: string | null;
   employee_code: string | null;
-  role: string | null;
+  role: UserRole;
 };
 
 type DailyEntryLite = {
@@ -39,12 +40,19 @@ type MonthlyRegionRuleLite = {
   quota: number | null;
 };
 
-type SummaryRow = {
+type StaffRow = {
   user_id: string;
   display_name: string | null;
   employee_code: string | null;
   total_quantity: number;
   achievement_status: AchievementStatus;
+};
+
+type PartTimeRow = {
+  user_id: string;
+  display_name: string | null;
+  employee_code: string | null;
+  total_quantity: number;
 };
 
 type RegionStat = {
@@ -89,7 +97,9 @@ function getStatusBadgeClass(status: AchievementStatus) {
 export default function ReportManagementPage() {
   const [loading, setLoading] = useState(true);
   const [displayName, setDisplayName] = useState("");
-  const [rows, setRows] = useState<SummaryRow[]>([]);
+
+  const [staffRows, setStaffRows] = useState<StaffRow[]>([]);
+  const [partTimeRows, setPartTimeRows] = useState<PartTimeRow[]>([]);
   const [regionStats, setRegionStats] = useState<RegionStat[]>([]);
 
   const currentYear = getCurrentYear();
@@ -171,7 +181,8 @@ export default function ReportManagementPage() {
 
       if (profilesError) {
         console.error("載入員工資料失敗:", profilesError.message);
-        setRows([]);
+        setStaffRows([]);
+        setPartTimeRows([]);
         setRegionStats([]);
         setLoading(false);
         return;
@@ -179,7 +190,8 @@ export default function ReportManagementPage() {
 
       if (dailyEntriesError) {
         console.error("載入填報資料失敗:", dailyEntriesError.message);
-        setRows([]);
+        setStaffRows([]);
+        setPartTimeRows([]);
         setRegionStats([]);
         setLoading(false);
         return;
@@ -187,7 +199,8 @@ export default function ReportManagementPage() {
 
       if (regionsError) {
         console.error("載入地區資料失敗:", regionsError.message);
-        setRows([]);
+        setStaffRows([]);
+        setPartTimeRows([]);
         setRegionStats([]);
         setLoading(false);
         return;
@@ -195,14 +208,17 @@ export default function ReportManagementPage() {
 
       if (monthlyRulesError) {
         console.error("載入本月建議配額失敗:", monthlyRulesError.message);
-        setRows([]);
+        setStaffRows([]);
+        setPartTimeRows([]);
         setRegionStats([]);
         setLoading(false);
         return;
       }
 
-      const staffProfiles = ((profilesData ?? []) as ProfileLite[]).filter(
-        (profile) => profile.role === "staff"
+      const allProfiles = (profilesData ?? []) as ProfileLite[];
+      const staffProfiles = allProfiles.filter((profile) => profile.role === "staff");
+      const partTimeProfiles = allProfiles.filter(
+        (profile) => profile.role === "part_time"
       );
 
       const regions = (regionsData ?? []) as RegionLite[];
@@ -231,7 +247,7 @@ export default function ReportManagementPage() {
         quotaByRegion.set(rule.region_id, Number(rule.quota ?? 0));
       });
 
-      const mergedRows: SummaryRow[] = staffProfiles
+      const nextStaffRows: StaffRow[] = staffProfiles
         .map((profile) => {
           const totalQuantity = entriesByUser.get(profile.id) ?? 0;
 
@@ -256,7 +272,20 @@ export default function ReportManagementPage() {
           )
         );
 
-      const finalRegionStats: RegionStat[] = regions
+      const nextPartTimeRows: PartTimeRow[] = partTimeProfiles
+        .map((profile) => ({
+          user_id: profile.id,
+          display_name: profile.display_name ?? null,
+          employee_code: profile.employee_code ?? null,
+          total_quantity: entriesByUser.get(profile.id) ?? 0,
+        }))
+        .sort((a, b) =>
+          String(a.employee_code ?? "").localeCompare(
+            String(b.employee_code ?? "")
+          )
+        );
+
+      const nextRegionStats: RegionStat[] = regions
         .map((region) => {
           const quantity = entriesByRegion.get(region.id) ?? 0;
           const quota = quotaByRegion.get(region.id) ?? 0;
@@ -271,8 +300,9 @@ export default function ReportManagementPage() {
         })
         .sort((a, b) => a.sort_order - b.sort_order);
 
-      setRows(mergedRows);
-      setRegionStats(finalRegionStats);
+      setStaffRows(nextStaffRows);
+      setPartTimeRows(nextPartTimeRows);
+      setRegionStats(nextRegionStats);
       setLoading(false);
     }
 
@@ -284,32 +314,39 @@ export default function ReportManagementPage() {
   }, [selectedYear, selectedMonth]);
 
   const aggregated = useMemo(() => {
-    const actualTotalQuantity = rows.reduce(
+    const staffActualTotal = staffRows.reduce(
       (sum, row) => sum + row.total_quantity,
       0
     );
+
+    const partTimeActualTotal = partTimeRows.reduce(
+      (sum, row) => sum + row.total_quantity,
+      0
+    );
+
+    const actualTotalQuantity = staffActualTotal + partTimeActualTotal;
 
     const monthQuotaTotal = regionStats.reduce(
       (sum, region) => sum + Number(region.quota ?? 0),
       0
     );
 
-    const achievedCount = rows.filter(
+    const achievedCount = staffRows.filter(
       (row) => row.achievement_status === "達標"
     ).length;
 
-    const notAchievedCount = rows.filter(
+    const notAchievedCount = staffRows.filter(
       (row) => row.achievement_status === "未達標"
     ).length;
 
-    const notFilledCount = rows.filter(
+    const notFilledCount = staffRows.filter(
       (row) => row.achievement_status === "未填報"
     ).length;
 
     let settlementStatus = "未結算";
 
-    if (rows.length > 0) {
-      if (achievedCount === rows.length) {
+    if (staffRows.length > 0) {
+      if (achievedCount === staffRows.length) {
         settlementStatus = "全部達標";
       } else if (achievedCount > 0) {
         settlementStatus = "部分達標";
@@ -321,12 +358,14 @@ export default function ReportManagementPage() {
     return {
       actualTotalQuantity,
       monthQuotaTotal,
+      staffActualTotal,
+      partTimeActualTotal,
       achievedCount,
       notAchievedCount,
       notFilledCount,
       settlementStatus,
     };
-  }, [rows, regionStats]);
+  }, [staffRows, partTimeRows, regionStats]);
 
   const totalProgressPercent = useMemo(() => {
     return progressPercent(
@@ -341,6 +380,8 @@ export default function ReportManagementPage() {
       aggregated.monthQuotaTotal
     );
   }, [aggregated.actualTotalQuantity, aggregated.monthQuotaTotal]);
+
+  const totalDisplayedUsers = staffRows.length + partTimeRows.length;
 
   if (loading) {
     return (
@@ -419,7 +460,7 @@ export default function ReportManagementPage() {
                   管理員：{displayName || "-"}
                 </span>
                 <span className="rounded-full bg-slate-100 px-3 py-1">
-                  目前顯示：{rows.length} 人
+                  目前顯示：{totalDisplayedUsers} 人
                 </span>
               </div>
             </div>
@@ -433,21 +474,21 @@ export default function ReportManagementPage() {
               </div>
 
               <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <p className="text-sm text-slate-500">達標人數</p>
+                <p className="text-sm text-slate-500">達標人數（全職）</p>
                 <p className="mt-2 text-3xl font-bold text-slate-900">
                   {aggregated.achievedCount}
                 </p>
               </div>
 
               <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <p className="text-sm text-slate-500">未達標人數</p>
+                <p className="text-sm text-slate-500">未達標人數（全職）</p>
                 <p className="mt-2 text-3xl font-bold text-slate-900">
                   {aggregated.notAchievedCount}
                 </p>
               </div>
 
               <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <p className="text-sm text-slate-500">月結算狀態</p>
+                <p className="text-sm text-slate-500">月結算狀態（全職）</p>
                 <p className="mt-2 text-2xl font-bold text-slate-900">
                   {aggregated.settlementStatus}
                 </p>
@@ -475,6 +516,15 @@ export default function ReportManagementPage() {
                     className={`h-3 rounded-full transition-all ${totalProgressColor}`}
                     style={{ width: `${totalProgressPercent}%` }}
                   />
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <div className="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                  全職完成：{aggregated.staffActualTotal}
+                </div>
+                <div className="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                  兼職完成：{aggregated.partTimeActualTotal}
                 </div>
               </div>
             </section>
@@ -520,7 +570,7 @@ export default function ReportManagementPage() {
 
             <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
               <div className="mb-4 flex items-center justify-between">
-                <h2 className="text-xl font-semibold text-slate-900">員工統計</h2>
+                <h2 className="text-xl font-semibold text-slate-900">全職員工統計</h2>
                 <span className="text-sm text-slate-500">達標標準：400分</span>
               </div>
 
@@ -543,7 +593,7 @@ export default function ReportManagementPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {rows.map((row) => (
+                    {staffRows.map((row) => (
                       <tr key={row.user_id}>
                         <td className="border-b border-slate-100 px-4 py-3 text-sm text-slate-800">
                           {row.display_name || "-"}
@@ -566,13 +616,70 @@ export default function ReportManagementPage() {
                       </tr>
                     ))}
 
-                    {rows.length === 0 && (
+                    {staffRows.length === 0 && (
                       <tr>
                         <td
                           colSpan={4}
                           className="px-4 py-8 text-center text-sm text-slate-500"
                         >
-                          本月暫無員工資料
+                          本月暫無全職員工資料
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="text-xl font-semibold text-slate-900">兼職員工統計</h2>
+                <span className="text-sm text-slate-500">兼職只計份數，不計分</span>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="min-w-full border-separate border-spacing-0">
+                  <thead>
+                    <tr>
+                      <th className="border-b border-slate-200 px-4 py-3 text-left text-sm font-semibold text-slate-700">
+                        員工
+                      </th>
+                      <th className="border-b border-slate-200 px-4 py-3 text-left text-sm font-semibold text-slate-700">
+                        員工編號
+                      </th>
+                      <th className="border-b border-slate-200 px-4 py-3 text-right text-sm font-semibold text-slate-700">
+                        完成份數
+                      </th>
+                      <th className="border-b border-slate-200 px-4 py-3 text-center text-sm font-semibold text-slate-700">
+                        備註
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {partTimeRows.map((row) => (
+                      <tr key={row.user_id}>
+                        <td className="border-b border-slate-100 px-4 py-3 text-sm text-slate-800">
+                          {row.display_name || "-"}
+                        </td>
+                        <td className="border-b border-slate-100 px-4 py-3 text-sm text-slate-600">
+                          {row.employee_code || "-"}
+                        </td>
+                        <td className="border-b border-slate-100 px-4 py-3 text-right text-sm font-semibold text-slate-900">
+                          {row.total_quantity}
+                        </td>
+                        <td className="border-b border-slate-100 px-4 py-3 text-center text-sm text-slate-600">
+                          不計分
+                        </td>
+                      </tr>
+                    ))}
+
+                    {partTimeRows.length === 0 && (
+                      <tr>
+                        <td
+                          colSpan={4}
+                          className="px-4 py-8 text-center text-sm text-slate-500"
+                        >
+                          本月暫無兼職員工資料
                         </td>
                       </tr>
                     )}
@@ -583,16 +690,16 @@ export default function ReportManagementPage() {
 
             <section className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <p className="text-sm text-slate-500">未填報人數</p>
+                <p className="text-sm text-slate-500">未填報人數（全職）</p>
                 <p className="mt-2 text-3xl font-bold text-slate-900">
                   {aggregated.notFilledCount}
                 </p>
               </div>
 
               <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <p className="text-sm text-slate-500">目前顯示員工數</p>
+                <p className="text-sm text-slate-500">目前顯示總人數</p>
                 <p className="mt-2 text-3xl font-bold text-slate-900">
-                  {rows.length}
+                  {totalDisplayedUsers}
                 </p>
               </div>
             </section>

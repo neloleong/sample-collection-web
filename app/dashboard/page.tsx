@@ -4,9 +4,13 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabase";
 import PageActionButtons from "../components/PageActionButtons";
-import { getCurrentYearMonth, getMonthStartString, getNextMonthStart } from "@/lib/month";
+import {
+  getCurrentYearMonth,
+  getMonthStartString,
+  getNextMonthStart,
+} from "@/lib/month";
 
-type Role = "staff" | "admin";
+type Role = "staff" | "admin" | "part_time";
 
 type RegionCategory = {
   id: number;
@@ -60,8 +64,6 @@ type ProfileRow = {
   display_name: string | null;
   role: Role | null;
 };
-
-
 
 function round2(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
@@ -188,42 +190,42 @@ function computeLiveSummary(params: {
   }
 
   const meetsQty400 = totalValidQty >= 400;
-  const meetsNonMainland100 = nonMainlandQty >= 100;
-  const meetsScore420 = adjustedScore >= 420;
-  const meetsStructure = totalValidQty > 0;
+const meetsNonMainland100 = nonMainlandQty >= 100;
+const meetsScore420 = adjustedScore >= 420;
+const meetsStructure = totalValidQty > 0;
 
-  const finalBonusMop =
-    meetsQty400 && meetsNonMainland100 && meetsScore420 && meetsStructure
-      ? round2(adjustedScore)
-      : 0;
+const finalBonusMop =
+  meetsQty400 && meetsNonMainland100 && meetsScore420 && meetsStructure
+    ? round2(adjustedScore)
+    : 0;
 
-  const finalStatus =
-    totalValidQty > 0
-      ? finalBonusMop > 0
-        ? "已達標"
-        : "即時計算"
-      : "未結算";
+const finalStatus =
+  totalValidQty > 0
+    ? finalBonusMop > 0
+      ? "已達標"
+      : "即時計算"
+    : "未結算";
 
-  const needQty = Math.max(400 - totalValidQty, 0);
-  const needNonMainland = Math.max(100 - nonMainlandQty, 0);
-  const needScore = Math.max(420 - adjustedScore, 0);
+const needQty = Math.max(400 - totalValidQty, 0);
+const needNonMainland = Math.max(100 - nonMainlandQty, 0);
+const needScore = Math.max(420 - adjustedScore, 0);
 
-  return {
-    total_valid_qty: totalValidQty,
-    mainland_qty: mainlandQty,
-    non_mainland_qty: nonMainlandQty,
-    raw_score: round2(rawScore),
-    adjusted_score: round2(adjustedScore),
-    final_bonus_mop: round2(finalBonusMop),
-    meets_qty_400: meetsQty400,
-    meets_non_mainland_100: meetsNonMainland100,
-    meets_score_420: meetsScore420,
-    meets_structure: meetsStructure,
-    final_status: finalStatus,
-    need_qty: needQty,
-    need_non_mainland: needNonMainland,
-    need_score: round2(needScore),
-  };
+return {
+  total_valid_qty: totalValidQty,
+  mainland_qty: mainlandQty,
+  non_mainland_qty: nonMainlandQty,
+  raw_score: round2(rawScore),
+  adjusted_score: round2(adjustedScore),
+  final_bonus_mop: round2(finalBonusMop),
+  meets_qty_400: meetsQty400,
+  meets_non_mainland_100: meetsNonMainland100,
+  meets_score_420: meetsScore420,
+  meets_structure: meetsStructure,
+  final_status: finalStatus,
+  need_qty: needQty,
+  need_non_mainland: needNonMainland,
+  need_score: round2(needScore),
+};
 }
 
 function progressPercent(value: number, target: number) {
@@ -384,18 +386,30 @@ export default function DashboardPage() {
     );
   }
 
+  const isAdmin = role === "admin";
+  const isPartTime = role === "part_time";
+  const showScoreCards = !isPartTime;
+  const showProgressSection = !isPartTime;
+
   return (
     <main className="min-h-screen bg-slate-50 px-6 py-10">
       <div className="mx-auto max-w-7xl space-y-6">
-        
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900">個人 Dashboard</h1>
-            <p className="mt-1 text-sm text-slate-600">使用者：{displayName}</p>
-            <p className="mt-1 text-sm text-slate-500">
-              本次使用規則月份：{monthStart}
-            </p>
-          </div>
-          
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">個人 Dashboard</h1>
+          <p className="mt-1 text-sm text-slate-600">使用者：{displayName}</p>
+          <p className="mt-1 text-sm text-slate-500">
+            本次使用規則月份：{monthStart}
+          </p>
+          <p className="mt-1 text-sm text-slate-500">
+            角色：
+            {role === "admin"
+              ? "管理員"
+              : role === "part_time"
+              ? "兼職"
+              : "全職"}
+          </p>
+        </div>
+
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <PageActionButtons />
         </div>
@@ -406,7 +420,11 @@ export default function DashboardPage() {
           </div>
         ) : null}
 
-        <div className={`grid gap-4 ${role === "admin" ? "md:grid-cols-4" : "md:grid-cols-3"}`}>
+        <div
+          className={`grid gap-4 ${
+            isAdmin ? "md:grid-cols-4" : "md:grid-cols-3"
+          }`}
+        >
           <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
             <p className="text-sm text-slate-500">本月總份數</p>
             <p className="mt-2 text-3xl font-bold text-slate-900">
@@ -428,7 +446,7 @@ export default function DashboardPage() {
             </p>
           </div>
 
-          {role === "admin" ? (
+          {isAdmin ? (
             <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
               <p className="text-sm text-slate-500">即時獎金（MOP）</p>
               <p className="mt-2 text-3xl font-bold text-slate-900">
@@ -438,102 +456,119 @@ export default function DashboardPage() {
           ) : null}
         </div>
 
-        <div className={`grid gap-4 ${role === "admin" ? "md:grid-cols-3" : "md:grid-cols-2"}`}>
-          <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-            <p className="text-sm text-slate-500">原始分數</p>
-            <p className="mt-2 text-3xl font-bold text-slate-900">
-              {liveSummary.raw_score}
-            </p>
-          </div>
-
-          <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-            <p className="text-sm text-slate-500">調整後分數</p>
-            <p className="mt-2 text-3xl font-bold text-slate-900">
-              {liveSummary.adjusted_score}
-            </p>
-          </div>
-
-          {role === "admin" ? (
+        {showScoreCards ? (
+          <div
+            className={`grid gap-4 ${
+              isAdmin ? "md:grid-cols-3" : "md:grid-cols-2"
+            }`}
+          >
             <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-              <p className="text-sm text-slate-500">月結算狀態</p>
-              <p className="mt-2 text-2xl font-bold text-slate-900">
-                {liveSummary.final_status}
-              </p>
-            </div>
-          ) : null}
-        </div>
-
-        <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-          <h2 className="text-xl font-semibold text-slate-900">達標進度</h2>
-
-          <div className="mt-4 space-y-5">
-            <div>
-              <div className="flex items-center justify-between text-sm text-slate-700">
-                <span>總份數（目標 400）</span>
-                <span>
-                  {liveSummary.total_valid_qty} / 400
-                </span>
-              </div>
-              <div className="mt-2 h-2 w-full rounded-full bg-slate-200">
-                <div
-                  className="h-2 rounded-full bg-blue-500"
-                  style={{
-                    width: `${progressPercent(liveSummary.total_valid_qty, 400)}%`,
-                  }}
-                />
-              </div>
-              <p className="mt-1 text-xs text-slate-500">
-                {liveSummary.need_qty === 0
-                  ? "已達標"
-                  : `還差 ${liveSummary.need_qty} 份`}
+              <p className="text-sm text-slate-500">原始分數</p>
+              <p className="mt-2 text-3xl font-bold text-slate-900">
+                {liveSummary.raw_score}
               </p>
             </div>
 
-            <div>
-              <div className="flex items-center justify-between text-sm text-slate-700">
-                <span>非內地份數（目標 100）</span>
-                <span>
-                  {liveSummary.non_mainland_qty} / 100
-                </span>
-              </div>
-              <div className="mt-2 h-2 w-full rounded-full bg-slate-200">
-                <div
-                  className="h-2 rounded-full bg-green-500"
-                  style={{
-                    width: `${progressPercent(liveSummary.non_mainland_qty, 100)}%`,
-                  }}
-                />
-              </div>
-              <p className="mt-1 text-xs text-slate-500">
-                {liveSummary.need_non_mainland === 0
-                  ? "已達標"
-                  : `還差 ${liveSummary.need_non_mainland} 份`}
+            <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+              <p className="text-sm text-slate-500">調整後分數</p>
+              <p className="mt-2 text-3xl font-bold text-slate-900">
+                {liveSummary.adjusted_score}
               </p>
             </div>
 
-            <div>
-              <div className="flex items-center justify-between text-sm text-slate-700">
-                <span>調整後分數（目標 420）</span>
-                <span>
-                  {liveSummary.adjusted_score} / 420
-                </span>
+            {isAdmin ? (
+              <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+                <p className="text-sm text-slate-500">月結算狀態</p>
+                <p className="mt-2 text-2xl font-bold text-slate-900">
+                  {liveSummary.final_status}
+                </p>
               </div>
-              <div className="mt-2 h-2 w-full rounded-full bg-slate-200">
-                <div
-                  className="h-2 rounded-full bg-purple-500"
-                  style={{
-                    width: `${progressPercent(liveSummary.adjusted_score, 420)}%`,
-                  }}
-                />
+            ) : null}
+          </div>
+        ) : null}
+
+        {showProgressSection ? (
+          <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+            <h2 className="text-xl font-semibold text-slate-900">達標進度</h2>
+
+            <div className="mt-4 space-y-5">
+              <div>
+                <div className="flex items-center justify-between text-sm text-slate-700">
+                  <span>總份數（目標 400）</span>
+                  <span>
+                    {liveSummary.total_valid_qty} / 400
+                  </span>
+                </div>
+                <div className="mt-2 h-2 w-full rounded-full bg-slate-200">
+                  <div
+                    className="h-2 rounded-full bg-blue-500"
+                    style={{
+                      width: `${progressPercent(
+                        liveSummary.total_valid_qty,
+                        400
+                      )}%`,
+                    }}
+                  />
+                </div>
+                <p className="mt-1 text-xs text-slate-500">
+                  {liveSummary.need_qty === 0
+                    ? "已達標"
+                    : `還差 ${liveSummary.need_qty} 份`}
+                </p>
               </div>
-              <p className="mt-1 text-xs text-slate-500">
-                {liveSummary.need_score === 0
-                  ? "已達標"
-                  : `還差 ${liveSummary.need_score} 分`}
-              </p>
+
+              <div>
+                <div className="flex items-center justify-between text-sm text-slate-700">
+                  <span>非內地份數（目標 100）</span>
+                  <span>
+                    {liveSummary.non_mainland_qty} / 100
+                  </span>
+                </div>
+                <div className="mt-2 h-2 w-full rounded-full bg-slate-200">
+                  <div
+                    className="h-2 rounded-full bg-green-500"
+                    style={{
+                      width: `${progressPercent(
+                        liveSummary.non_mainland_qty,
+                        100
+                      )}%`,
+                    }}
+                  />
+                </div>
+                <p className="mt-1 text-xs text-slate-500">
+                  {liveSummary.need_non_mainland === 0
+                    ? "已達標"
+                    : `還差 ${liveSummary.need_non_mainland} 份`}
+                </p>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between text-sm text-slate-700">
+                  <span>調整後分數（目標 420）</span>
+                  <span>
+                    {liveSummary.adjusted_score} / 420
+                  </span>
+                </div>
+                <div className="mt-2 h-2 w-full rounded-full bg-slate-200">
+                  <div
+                    className="h-2 rounded-full bg-purple-500"
+                    style={{
+                      width: `${progressPercent(
+                        liveSummary.adjusted_score,
+                        420
+                      )}%`,
+                    }}
+                  />
+                </div>
+                <p className="mt-1 text-xs text-slate-500">
+                  {liveSummary.need_score === 0
+                    ? "已達標"
+                    : `還差 ${liveSummary.need_score} 分`}
+                </p>
+              </div>
             </div>
           </div>
-        </div>
+        ) : null}
 
         <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
           <h2 className="text-xl font-semibold text-slate-900">本月各地區總份數</h2>
@@ -580,6 +615,14 @@ export default function DashboardPage() {
             <p>3. 調整後分數：在原始分數基礎上，加入每週市場狀況倍率後的結果。</p>
             <p>4. 達標進度會顯示你距離目標還差多少，包括總份數、非內地份數及調整後分數。</p>
             <p>5. 建議你每日查看本頁進度，了解自己距離每月目標還差多少，方便安排後續工作重點。</p>
+          </div>
+        ) : role === "part_time" ? (
+          <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600 ring-1 ring-slate-200">
+            <p>使用說明：</p>
+            <p className="mt-2">1. 兼職只計份數，不計分數。</p>
+            <p>2. 此頁只顯示你的本月總份數、內地份數、非內地份數及各地區份數。</p>
+            <p>3. 兼職不參與 400 分、非內地 100 分、調整後 420 分等達標計算。</p>
+            <p>4. 建議你重點查看各地區本月份數及建議配額，避免超出地區上限。</p>
           </div>
         ) : (
           <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600 ring-1 ring-slate-200">

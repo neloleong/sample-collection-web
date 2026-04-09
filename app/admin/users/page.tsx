@@ -4,7 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import PageActionButtons from "../../components/PageActionButtons";
-type Role = "admin" | "staff";
+
+type Role = "admin" | "staff" | "part_time";
 
 type UserManagementRow = {
   id: string;
@@ -24,18 +25,33 @@ type CreateUserForm = {
 };
 
 function normalizeRole(role: unknown): Role {
-  return String(role ?? "").toLowerCase().trim() === "admin" ? "admin" : "staff";
+  const value = String(role ?? "").toLowerCase().trim();
+
+  if (value === "admin") return "admin";
+  if (value === "part_time") return "part_time";
+  return "staff";
 }
 
 function formatEmployeeCode(role: Role, n: number): string {
-  return role === "admin"
-    ? `A${String(n).padStart(3, "0")}`
-    : `EMIT-QR${String(n).padStart(2, "0")}`;
+  if (role === "admin") {
+    return `A${String(n).padStart(3, "0")}`;
+  }
+
+  if (role === "part_time") {
+    return `EMIT-PT${String(n).padStart(2, "0")}`;
+  }
+
+  return `EMIT-QR${String(n).padStart(2, "0")}`;
 }
 
 function parseEmployeeNumber(code: string, role: Role): number | null {
   if (role === "admin") {
     const match = code.match(/^A(\d+)$/i);
+    return match ? Number(match[1]) : null;
+  }
+
+  if (role === "part_time") {
+    const match = code.match(/^EMIT-PT(\d+)$/i);
     return match ? Number(match[1]) : null;
   }
 
@@ -57,6 +73,18 @@ function formatDateTime(value: string | null): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString();
+}
+
+function getRoleBadgeClass(role: Role) {
+  if (role === "admin") {
+    return "bg-red-100 text-red-700";
+  }
+
+  if (role === "part_time") {
+    return "bg-amber-100 text-amber-700";
+  }
+
+  return "bg-blue-100 text-blue-700";
 }
 
 export default function AdminUsersPage() {
@@ -218,60 +246,60 @@ export default function AdminUsersPage() {
   }
 
   async function handleDeleteUser(userId: string) {
-  if (userId === currentUserId) {
-    setError("不能刪除目前登入中的管理員帳戶");
-    return;
+    if (userId === currentUserId) {
+      setError("不能刪除目前登入中的管理員帳戶");
+      return;
+    }
+
+    const confirmed = window.confirm("確定刪除這個帳號？此操作不可回復。");
+    if (!confirmed) return;
+
+    setDeletingId(userId);
+    setError("");
+    setSuccess("");
+
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.access_token) {
+        setError("目前登入狀態無效，請重新登入。");
+        return;
+      }
+
+      const res = await fetch(`/api/admin/users/${userId}`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+        },
+      });
+
+      const contentType = res.headers.get("content-type") || "";
+      let payload: any = null;
+
+      if (contentType.includes("application/json")) {
+        payload = await res.json();
+      } else {
+        const text = await res.text();
+        console.error("Delete API returned non-JSON:", text);
+        setError("刪除 API 沒有回傳 JSON，請檢查 route 或 middleware");
+        return;
+      }
+
+      if (!res.ok) {
+        setError(payload?.error ?? "刪除失敗");
+        return;
+      }
+
+      setRows((prev) => prev.filter((row) => row.id !== userId));
+      setSuccess("帳號已刪除");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "刪除失敗");
+    } finally {
+      setDeletingId(null);
+    }
   }
-
-  const confirmed = window.confirm("確定刪除這個帳號？此操作不可回復。");
-  if (!confirmed) return;
-
-  setDeletingId(userId);
-  setError("");
-  setSuccess("");
-
-  try {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-
-    if (!session?.access_token) {
-      setError("目前登入狀態無效，請重新登入。");
-      return;
-    }
-
-    const res = await fetch(`/api/admin/users/${userId}`, {
-      method: "DELETE",
-      headers: {
-        Authorization: `Bearer ${session.access_token}`,
-      },
-    });
-
-    const contentType = res.headers.get("content-type") || "";
-    let payload: any = null;
-
-    if (contentType.includes("application/json")) {
-      payload = await res.json();
-    } else {
-      const text = await res.text();
-      console.error("Delete API returned non-JSON:", text);
-      setError("刪除 API 沒有回傳 JSON，請檢查 route 或 middleware");
-      return;
-    }
-
-    if (!res.ok) {
-      setError(payload?.error ?? "刪除失敗");
-      return;
-    }
-
-    setRows((prev) => prev.filter((row) => row.id !== userId));
-    setSuccess("帳號已刪除");
-  } catch (e) {
-    setError(e instanceof Error ? e.message : "刪除失敗");
-  } finally {
-    setDeletingId(null);
-  }
-}
 
   const filteredRows = useMemo(() => {
     const q = keyword.trim().toLowerCase();
@@ -314,16 +342,17 @@ export default function AdminUsersPage() {
             </p>
           </div>
         </div>
+
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                    <PageActionButtons />
-          </div>  
+          <PageActionButtons />
+        </div>
 
         <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
           <div className="mb-5 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
             <div>
               <h2 className="text-xl font-semibold text-slate-900">新增帳號</h2>
               <p className="mt-1 text-sm text-slate-500">
-                staff 預設為 EMIT-QR 編號，admin 預設為 A 編號，亦可手動修改。
+                staff 預設為 EMIT-QR 編號，part_time 預設為 EMIT-PT 編號，admin 預設為 A 編號，亦可手動修改。
               </p>
             </div>
 
@@ -423,7 +452,7 @@ export default function AdminUsersPage() {
                   }));
                 }}
                 className="h-12 w-full rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
-                placeholder="例如：EMIT-QR04 或 A002"
+                placeholder="例如：EMIT-QR04 / EMIT-PT01 / A002"
                 required
               />
             </div>
@@ -446,6 +475,7 @@ export default function AdminUsersPage() {
                 className="h-12 w-full rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
               >
                 <option value="staff">staff</option>
+                <option value="part_time">part_time</option>
                 <option value="admin">admin</option>
               </select>
             </div>
@@ -533,8 +563,8 @@ export default function AdminUsersPage() {
                   </tr>
                 ) : (
                   filteredRows.map((row) => {
+                    const rowRole = normalizeRole(row.role);
                     const isCurrentUser = row.id === currentUserId;
-                    const role = normalizeRole(row.role);
 
                     return (
                       <tr key={row.id} className="text-sm text-slate-700">
@@ -549,13 +579,11 @@ export default function AdminUsersPage() {
                         </td>
                         <td className="border-b border-slate-100 px-4 py-4">
                           <span
-                            className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
-                              role === "admin"
-                                ? "bg-red-100 text-red-700"
-                                : "bg-blue-100 text-blue-700"
-                            }`}
+                            className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${getRoleBadgeClass(
+                              rowRole
+                            )}`}
                           >
-                            {role.toUpperCase()}
+                            {rowRole.toUpperCase()}
                           </span>
                         </td>
                         <td className="border-b border-slate-100 px-4 py-4">
@@ -589,7 +617,8 @@ export default function AdminUsersPage() {
             <p>說明：</p>
             <p className="mt-2">1. 此頁只供 admin 管理員使用。</p>
             <p>2. 新增帳號時可自動生成員工編號，亦可手動修改。</p>
-            <p>3. 刪除帳號會連同對應登入帳戶一併移除。</p>
+            <p>3. staff 預設為 EMIT-QRxx，part_time 預設為 EMIT-PTxx，admin 預設為 Axxx。</p>
+            <p>4. 刪除帳號會連同對應登入帳戶一併移除。</p>
           </div>
         </div>
       </div>
