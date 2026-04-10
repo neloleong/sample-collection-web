@@ -1,23 +1,36 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-type Role = "admin" | "staff";
+type Role = "admin" | "staff" | "part_time";
 
 function normalizeRole(role: unknown): Role {
   const r = String(role ?? "").toLowerCase().trim();
-  return r === "admin" ? "admin" : "staff";
+
+  if (r === "admin") return "admin";
+  if (r === "part_time") return "part_time";
+  return "staff";
 }
 
 function formatEmployeeCode(role: Role, n: number) {
   if (role === "admin") {
     return `A${String(n).padStart(3, "0")}`;
   }
+
+  if (role === "part_time") {
+    return `EMIT-PT${String(n).padStart(2, "0")}`;
+  }
+
   return `EMIT-QR${String(n).padStart(2, "0")}`;
 }
 
 function parseEmployeeNumber(code: string, role: Role): number | null {
   if (role === "admin") {
     const match = code.match(/^A(\d+)$/i);
+    return match ? Number(match[1]) : null;
+  }
+
+  if (role === "part_time") {
+    const match = code.match(/^EMIT-PT(\d+)$/i);
     return match ? Number(match[1]) : null;
   }
 
@@ -68,7 +81,6 @@ export async function POST(req: Request) {
     }
 
     const token = authHeader.replace("Bearer ", "");
-
     const body = await req.json();
 
     const email = String(body.email ?? "").trim().toLowerCase();
