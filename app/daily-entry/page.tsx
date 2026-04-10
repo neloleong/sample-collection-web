@@ -20,16 +20,6 @@ type DailyEntryRow = {
   quantity: number;
 };
 
-type DailyEntryMonthRow = {
-  region_id: number;
-  quantity: number | null;
-};
-
-type MonthlyRegionRule = {
-  region_id: number;
-  quota: number | null;
-};
-
 type DailyWorkLogRow = {
   id?: number;
   user_id?: string;
@@ -79,27 +69,6 @@ function getLocalTodayString() {
   return local.toISOString().slice(0, 10);
 }
 
-function getMonthBounds(dateString: string) {
-  const base = new Date(`${dateString}T00:00:00`);
-  const year = base.getFullYear();
-  const month = base.getMonth();
-
-  const start = new Date(year, month, 1);
-  const next = new Date(year, month + 1, 1);
-
-  const format = (d: Date) => {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    return `${y}-${m}-${day}`;
-  };
-
-  return {
-    monthStart: format(start),
-    nextMonthStart: format(next),
-  };
-}
-
 function getEmptyWorkLogForm(): WorkLogForm {
   return {
     interviewer_id: "",
@@ -128,6 +97,27 @@ function getShiftParts(value: string) {
 function buildShiftValue(start: string, end: string) {
   if (!start || !end) return "";
   return `${start}-${end}`;
+}
+
+function getMonthBounds(dateString: string) {
+  const base = new Date(`${dateString}T00:00:00`);
+  const year = base.getFullYear();
+  const month = base.getMonth();
+
+  const start = new Date(year, month, 1);
+  const next = new Date(year, month + 1, 1);
+
+  const format = (d: Date) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  };
+
+  return {
+    monthStart: format(start),
+    nextMonthStart: format(next),
+  };
 }
 
 const SURVEY_LOCATION_OPTIONS = [
@@ -203,11 +193,13 @@ export default function DailyEntryPage() {
   const [selectedDate, setSelectedDate] = useState<string>(getLocalTodayString());
 
   const [quantities, setQuantities] = useState<Record<number, string>>({});
-  const [savedQuantities, setSavedQuantities] = useState<Record<number, string>>({});
-  const [monthlyRuleMap, setMonthlyRuleMap] = useState<Record<number, number>>({});
-  const [monthRegionTotalsRaw, setMonthRegionTotalsRaw] = useState<Record<number, number>>(
+  const [savedQuantities, setSavedQuantities] = useState<Record<number, string>>(
     {}
   );
+  const [monthlyRuleMap, setMonthlyRuleMap] = useState<Record<number, number>>({});
+  const [monthRegionTotalsRaw, setMonthRegionTotalsRaw] = useState<
+    Record<number, number>
+  >({});
 
   const [workLog, setWorkLog] = useState<WorkLogForm>(getEmptyWorkLogForm());
 
@@ -216,6 +208,22 @@ export default function DailyEntryPage() {
   const [message, setMessage] = useState("");
 
   const isPartTime = role === "part_time";
+
+  const buildEmptyQuantities = (regionList: RegionCategory[]) => {
+    const initial: Record<number, string> = {};
+    regionList.forEach((region) => {
+      initial[region.id] = "";
+    });
+    return initial;
+  };
+
+  const buildEmptyNumberMap = (regionList: RegionCategory[]) => {
+    const initial: Record<number, number> = {};
+    regionList.forEach((region) => {
+      initial[region.id] = 0;
+    });
+    return initial;
+  };
 
   const totalQty = useMemo(() => {
     return regions.reduce((sum, region) => {
@@ -272,28 +280,19 @@ export default function DailyEntryPage() {
     });
 
     return next;
-  }, [regions, monthlyRuleMap, monthRegionTotalsRaw, savedQuantities, quantities, isPartTime]);
+  }, [
+    regions,
+    monthlyRuleMap,
+    monthRegionTotalsRaw,
+    savedQuantities,
+    quantities,
+    isPartTime,
+  ]);
 
   const hasPartTimeOverLimit = useMemo(() => {
     if (!isPartTime) return false;
     return Object.values(regionQuotaStats).some((item) => item.isOverLimit);
   }, [isPartTime, regionQuotaStats]);
-
-  const buildEmptyQuantities = (regionList: RegionCategory[]) => {
-    const initial: Record<number, string> = {};
-    regionList.forEach((region) => {
-      initial[region.id] = "";
-    });
-    return initial;
-  };
-
-  const buildEmptyNumberMap = (regionList: RegionCategory[]) => {
-    const initial: Record<number, number> = {};
-    regionList.forEach((region) => {
-      initial[region.id] = 0;
-    });
-    return initial;
-  };
 
   const loadDailyEntries = async (
     currentUserId: string,
@@ -325,18 +324,18 @@ export default function DailyEntryPage() {
     currentDate: string,
     regionList: RegionCategory[]
   ) => {
-    const { monthStart, nextMonthStart } = getMonthBounds(currentDate);
+    const { monthStart } = getMonthBounds(currentDate);
 
-    const [rulesResult, monthEntriesResult] = await Promise.all([
+    const [rulesResult, totalsResult] = await Promise.all([
       supabase
         .from("monthly_region_rules")
         .select("region_id, quota")
         .eq("rule_month", monthStart),
+
       supabase
-        .from("daily_entries")
-        .select("region_id, quantity")
-        .gte("entry_date", monthStart)
-        .lt("entry_date", nextMonthStart),
+        .from("monthly_region_totals_public")
+        .select("region_id, total_quantity")
+        .eq("month_start", monthStart),
     ]);
 
     if (rulesResult.error) {
@@ -344,21 +343,20 @@ export default function DailyEntryPage() {
       return;
     }
 
-    if (monthEntriesResult.error) {
-      setMessage(monthEntriesResult.error.message);
+    if (totalsResult.error) {
+      setMessage(totalsResult.error.message);
       return;
     }
 
     const nextRuleMap = buildEmptyNumberMap(regionList);
     const nextMonthTotals = buildEmptyNumberMap(regionList);
 
-    ((rulesResult.data ?? []) as MonthlyRegionRule[]).forEach((row) => {
+    (rulesResult.data ?? []).forEach((row: any) => {
       nextRuleMap[row.region_id] = Number(row.quota ?? 0);
     });
 
-    ((monthEntriesResult.data ?? []) as DailyEntryMonthRow[]).forEach((row) => {
-      nextMonthTotals[row.region_id] =
-        (nextMonthTotals[row.region_id] ?? 0) + Number(row.quantity ?? 0);
+    (totalsResult.data ?? []).forEach((row: any) => {
+      nextMonthTotals[row.region_id] = Number(row.total_quantity ?? 0);
     });
 
     setMonthlyRuleMap(nextRuleMap);
@@ -954,9 +952,7 @@ export default function DailyEntryPage() {
                       step="1"
                       placeholder="請輸入份數"
                       value={quantities[region.id] ?? ""}
-                      onChange={(e) =>
-                        handleQuantityChange(region.id, e.target.value)
-                      }
+                      onChange={(e) => handleQuantityChange(region.id, e.target.value)}
                       disabled={Boolean(isPartTime && stat?.isLocked)}
                       className={`w-full rounded-xl border px-4 py-3 outline-none ${
                         isPartTime && stat?.isLocked
