@@ -82,25 +82,6 @@ function getEmptyWorkLogForm(): WorkLogForm {
   };
 }
 
-function getShiftParts(value: string) {
-  if (!value || !value.includes("-")) {
-    return { start: "", end: "" };
-  }
-
-  const [start, end] = value.split("-");
-  return {
-    start: start ?? "",
-    end: end ?? "",
-  };
-}
-
-function buildShiftValue(start: string, end: string) {
-  if (start && end) return `${start}-${end}`;
-  if (start) return `${start}-`;
-  if (end) return `-${end}`;
-  return "";
-}
-
 function getMonthBounds(dateString: string) {
   const base = new Date(`${dateString}T00:00:00`);
   const year = base.getFullYear();
@@ -131,6 +112,20 @@ const SURVEY_LOCATION_OPTIONS = [
   { value: "macau_airport", label: "澳門國際機場 Macau International Airport" },
   { value: "qingmao_port", label: "青茂口岸 Qingmao Port" },
   { value: "inner_harbor_ferry_terminal", label: "内港客運碼頭 Inner Harbor Ferry Terminal" },
+];
+
+const WORKING_SHIFT_OPTIONS = [
+  { value: "", label: "請選擇工作時段" },
+  { value: "08:00-12:00", label: "08:00 - 12:00" },
+  { value: "09:00-13:00", label: "09:00 - 13:00" },
+  { value: "09:00-18:00", label: "09:00 - 18:00" },
+  { value: "10:00-14:00", label: "10:00 - 14:00" },
+  { value: "10:00-19:00", label: "10:00 - 19:00" },
+  { value: "12:00-16:00", label: "12:00 - 16:00" },
+  { value: "13:00-17:00", label: "13:00 - 17:00" },
+  { value: "14:00-18:00", label: "14:00 - 18:00" },
+  { value: "15:00-19:00", label: "15:00 - 19:00" },
+  { value: "18:00-22:00", label: "18:00 - 22:00" },
 ];
 
 const ISSUE_TYPE_OPTIONS = [
@@ -182,6 +177,13 @@ const FOOTFALL_OPTIONS = [
     label: "高峰時段，現場較擠迫 Peak period / Congested",
   },
 ];
+
+function getShiftDisplay(value: string) {
+  if (!value) return "未選擇";
+
+  const matched = WORKING_SHIFT_OPTIONS.find((option) => option.value === value);
+  return matched?.label ?? value;
+}
 
 export default function DailyEntryPage() {
   const router = useRouter();
@@ -245,10 +247,6 @@ export default function DailyEntryPage() {
       }, 0);
   }, [regions, quantities]);
 
-  const shiftParts = useMemo(() => {
-    return getShiftParts(workLog.working_shift);
-  }, [workLog.working_shift]);
-
   const regionQuotaStats = useMemo<Record<number, RegionQuotaStat>>(() => {
     const next: Record<number, RegionQuotaStat> = {};
 
@@ -295,8 +293,6 @@ export default function DailyEntryPage() {
     if (!isPartTime) return false;
     return Object.values(regionQuotaStats).some((item) => item.isOverLimit);
   }, [isPartTime, regionQuotaStats]);
-
-  
 
   const loadDailyEntries = async (
     currentUserId: string,
@@ -547,15 +543,6 @@ export default function DailyEntryPage() {
     });
   };
 
-  const updateWorkingShiftPart = (part: "start" | "end", value: string) => {
-    const current = getShiftParts(workLog.working_shift);
-
-    const nextStart = part === "start" ? value : current.start;
-    const nextEnd = part === "end" ? value : current.end;
-
-    updateWorkLogField("working_shift", buildShiftValue(nextStart, nextEnd));
-  };
-
   const handleSave = async () => {
     if (!userId) return;
 
@@ -773,26 +760,20 @@ export default function DailyEntryPage() {
                 4. 工作時段 Working Shift
               </label>
 
-              <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
-                <input
-                  type="time"
-                  value={shiftParts.start}
-                  onChange={(e) => updateWorkingShiftPart("start", e.target.value)}
-                  className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
-                />
-
-                <span className="text-sm text-slate-500">至</span>
-
-                <input
-                  type="time"
-                  value={shiftParts.end}
-                  onChange={(e) => updateWorkingShiftPart("end", e.target.value)}
-                  className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
-                />
-              </div>
+              <select
+                value={workLog.working_shift}
+                onChange={(e) => updateWorkLogField("working_shift", e.target.value)}
+                className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
+              >
+                {WORKING_SHIFT_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
 
               <p className="mt-2 text-xs text-slate-500">
-                已選時段：{workLog.working_shift || "未選擇"}
+                已選時段：{getShiftDisplay(workLog.working_shift)}
               </p>
             </div>
 
