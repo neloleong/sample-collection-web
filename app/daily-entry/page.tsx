@@ -95,8 +95,10 @@ function getShiftParts(value: string) {
 }
 
 function buildShiftValue(start: string, end: string) {
-  if (!start || !end) return "";
-  return `${start}-${end}`;
+  if (start && end) return `${start}-${end}`;
+  if (start) return `${start}-`;
+  if (end) return `-${end}`;
+  return "";
 }
 
 function getMonthBounds(dateString: string) {
@@ -293,6 +295,8 @@ export default function DailyEntryPage() {
     if (!isPartTime) return false;
     return Object.values(regionQuotaStats).some((item) => item.isOverLimit);
   }, [isPartTime, regionQuotaStats]);
+
+  
 
   const loadDailyEntries = async (
     currentUserId: string,
