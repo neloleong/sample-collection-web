@@ -71,8 +71,8 @@ function round2(value: number) {
 
 function getWeekStartDateString(dateString: string) {
   const date = new Date(`${dateString}T00:00:00`);
-  const day = date.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
+  const day = date.getDay(); // 0=Sun, 1=Mon, 2=Tue
+  const diff = day >= 2 ? 2 - day : -(5 + day);
   date.setDate(date.getDate() + diff);
 
   const year = date.getFullYear();

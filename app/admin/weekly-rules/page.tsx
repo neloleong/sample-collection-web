@@ -54,12 +54,14 @@ function getMonthStart() {
 
 function getWeekStart(dateString?: string) {
   const date = dateString ? new Date(`${dateString}T00:00:00`) : new Date();
-  const day = date.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
+  const day = date.getDay(); // 0=Sun, 1=Mon, 2=Tue
+  const diff = day >= 2 ? 2 - day : -(5 + day);
   date.setDate(date.getDate() + diff);
+
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const dayText = String(date.getDate()).padStart(2, "0");
+
   return `${year}-${month}-${dayText}`;
 }
 
@@ -402,7 +404,7 @@ export default function AdminWeeklyRulesPage() {
 
             <div>
               <label className="mb-2 block text-sm font-medium text-slate-700">
-                每星期調整起始日（週一）
+                每星期調整起始日（週二）
               </label>
               <input
                 type="date"
