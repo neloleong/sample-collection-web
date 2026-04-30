@@ -10,7 +10,8 @@ type Role = "admin" | "staff" | "part_time";
 type UserManagementRow = {
   id: string;
   email: string | null;
-  auth_created_at: string | null;
+  auth_created_at?: string | null;
+  created_at?: string | null;
   display_name: string | null;
   employee_code: string | null;
   role: Role | null;
@@ -68,11 +69,11 @@ function getNextEmployeeCode(rows: UserManagementRow[], role: Role): string {
   return formatEmployeeCode(role, max + 1);
 }
 
-function formatDateTime(value: string | null): string {
+function formatDateTime(value: string | null | undefined): string {
   if (!value) return "-";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString();
+  return date.toLocaleString("zh-HK");
 }
 
 function getRoleBadgeClass(role: Role) {
@@ -85,6 +86,12 @@ function getRoleBadgeClass(role: Role) {
   }
 
   return "bg-blue-100 text-blue-700";
+}
+
+function getRoleLabel(role: Role) {
+  if (role === "admin") return "admin";
+  if (role === "part_time") return "part_time";
+  return "staff";
 }
 
 export default function AdminUsersPage() {
@@ -160,13 +167,17 @@ export default function AdminUsersPage() {
     const { data, error } = await supabase
       .from("user_management_view")
       .select("*")
-      .order("auth_created_at", { ascending: false });
+      .order("display_name", { ascending: true });
 
     if (error) {
       throw new Error(error.message);
     }
 
-    const nextRows = (data ?? []) as UserManagementRow[];
+    const nextRows = ((data ?? []) as UserManagementRow[]).map((row) => ({
+      ...row,
+      role: normalizeRole(row.role),
+    }));
+
     setRows(nextRows);
 
     setForm((prev) => ({
@@ -201,33 +212,43 @@ export default function AdminUsersPage() {
         return;
       }
 
+      const payload = {
+        ...form,
+        email: form.email.trim(),
+        password: form.password,
+        display_name: form.display_name.trim(),
+        employee_code: form.employee_code.trim(),
+        role: normalizeRole(form.role),
+      };
+
       const res = await fetch("/api/admin/create-user", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${session.access_token}`,
         },
-        body: JSON.stringify(form),
+        body: JSON.stringify(payload),
       });
 
       const contentType = res.headers.get("content-type") || "";
-      let payload: any = null;
+      let result: any = null;
 
       if (contentType.includes("application/json")) {
-        payload = await res.json();
+        result = await res.json();
       } else {
         const text = await res.text();
         console.error("Create API returned non-JSON:", text);
-        setError("建立帳號 API 沒有回傳 JSON，請檢查 create-user route");
+        setError("建立帳號 API 沒有回傳 JSON，請檢查 create-user route。");
         return;
       }
 
       if (!res.ok) {
-        setError(payload?.error ?? "建立帳號失敗");
+        setError(result?.error ?? "建立帳號失敗");
         return;
       }
 
-      setSuccess(`帳號建立成功：${payload.user?.email ?? form.email}`);
+      setSuccess(`帳號建立成功：${result.user?.email ?? payload.email}`);
+
       await loadUsers();
 
       setForm((prev) => ({
@@ -276,24 +297,24 @@ export default function AdminUsersPage() {
       });
 
       const contentType = res.headers.get("content-type") || "";
-      let payload: any = null;
+      let result: any = null;
 
       if (contentType.includes("application/json")) {
-        payload = await res.json();
+        result = await res.json();
       } else {
         const text = await res.text();
         console.error("Delete API returned non-JSON:", text);
-        setError("刪除 API 沒有回傳 JSON，請檢查 route 或 middleware");
+        setError("刪除 API 沒有回傳 JSON，請檢查 route 或 middleware。");
         return;
       }
 
       if (!res.ok) {
-        setError(payload?.error ?? "刪除失敗");
+        setError(result?.error ?? "刪除失敗");
         return;
       }
 
-      setRows((prev) => prev.filter((row) => row.id !== userId));
       setSuccess("帳號已刪除");
+      await loadUsers();
     } catch (e) {
       setError(e instanceof Error ? e.message : "刪除失敗");
     } finally {
@@ -311,7 +332,7 @@ export default function AdminUsersPage() {
         (row.email ?? "").toLowerCase().includes(q) ||
         (row.display_name ?? "").toLowerCase().includes(q) ||
         (row.employee_code ?? "").toLowerCase().includes(q) ||
-        (row.role ?? "").toLowerCase().includes(q)
+        String(row.role ?? "").toLowerCase().includes(q)
       );
     });
   }, [rows, keyword]);
@@ -565,6 +586,8 @@ export default function AdminUsersPage() {
                   filteredRows.map((row) => {
                     const rowRole = normalizeRole(row.role);
                     const isCurrentUser = row.id === currentUserId;
+                    const createdTime =
+                      row.auth_created_at ?? row.created_at ?? null;
 
                     return (
                       <tr key={row.id} className="text-sm text-slate-700">
@@ -583,11 +606,11 @@ export default function AdminUsersPage() {
                               rowRole
                             )}`}
                           >
-                            {rowRole.toUpperCase()}
+                            {getRoleLabel(rowRole)}
                           </span>
                         </td>
                         <td className="border-b border-slate-100 px-4 py-4">
-                          {formatDateTime(row.auth_created_at)}
+                          {formatDateTime(createdTime)}
                         </td>
                         <td className="border-b border-slate-100 px-4 py-4">
                           {isCurrentUser ? (
