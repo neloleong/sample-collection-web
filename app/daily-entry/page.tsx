@@ -57,8 +57,10 @@ type RegionQuotaStat = {
   rawMonthTotal: number;
   savedTodayQty: number;
   currentInputQty: number;
+  baseWithoutTodaySaved: number;
   nextMonthTotal: number;
-  remainingBeforeToday: number;
+  allowedTodayQty: number;
+  remainingAfterInput: number;
   isLocked: boolean;
   isOverLimit: boolean;
 };
@@ -264,14 +266,29 @@ export default function DailyEntryPage() {
       const currentInputQty = Number(quantities[region.id] ?? 0);
 
       const baseWithoutTodaySaved = Math.max(rawMonthTotal - savedTodayQty, 0);
+
+      const allowedTodayQty =
+        isPartTime && quota > 0
+          ? Math.max(quota - baseWithoutTodaySaved, 0)
+          : Number.POSITIVE_INFINITY;
+
       const nextMonthTotal = baseWithoutTodaySaved + currentInputQty;
-      const remainingBeforeToday =
-        quota > 0 ? Math.max(quota - baseWithoutTodaySaved, 0) : 0;
+
+      const remainingAfterInput =
+        isPartTime && quota > 0
+          ? Math.max(allowedTodayQty - currentInputQty, 0)
+          : 0;
 
       const isLocked =
-        isPartTime && quota > 0 && remainingBeforeToday === 0 && savedTodayQty === 0;
+        isPartTime &&
+        quota > 0 &&
+        allowedTodayQty === 0 &&
+        savedTodayQty === 0;
 
-      const isOverLimit = isPartTime && quota > 0 && nextMonthTotal > quota;
+      const isOverLimit =
+        isPartTime &&
+        quota > 0 &&
+        currentInputQty > allowedTodayQty;
 
       next[region.id] = {
         region_id: region.id,
@@ -279,8 +296,11 @@ export default function DailyEntryPage() {
         rawMonthTotal,
         savedTodayQty,
         currentInputQty,
+        baseWithoutTodaySaved,
         nextMonthTotal,
-        remainingBeforeToday,
+        allowedTodayQty:
+          allowedTodayQty === Number.POSITIVE_INFINITY ? 0 : allowedTodayQty,
+        remainingAfterInput,
         isLocked,
         isOverLimit,
       };
@@ -586,7 +606,7 @@ export default function DailyEntryPage() {
     }
 
     if (isPartTime && hasPartTimeOverLimit) {
-      setMessage("有地區已超過當月份數上限，請先調整後再儲存。");
+      setMessage("有地區輸入份數超過今日可填上限，請先調整後再儲存。");
       setSaving(false);
       return;
     }
@@ -968,11 +988,9 @@ export default function DailyEntryPage() {
                         </span>
                       </p>
                       <p>
-                        尚餘可填：{" "}
+                        今日尚餘可填：{" "}
                         <span className="font-semibold text-slate-900">
-                          {stat?.quota > 0
-                            ? Math.max((stat?.quota ?? 0) - (stat?.nextMonthTotal ?? 0), 0)
-                            : 0}
+                          {stat?.remainingAfterInput ?? 0}
                         </span>
                       </p>
                     </div>
@@ -993,6 +1011,8 @@ export default function DailyEntryPage() {
                       className={`w-full rounded-xl border px-4 py-3 outline-none ${
                         isPartTime && stat?.isLocked
                           ? "border-red-200 bg-red-50 text-red-500"
+                          : isPartTime && stat?.isOverLimit
+                          ? "border-red-300 bg-red-50 text-red-700"
                           : "border-slate-300 focus:border-slate-500"
                       }`}
                     />
@@ -1005,7 +1025,7 @@ export default function DailyEntryPage() {
 
                     {isPartTime && stat?.isOverLimit ? (
                       <p className="mt-2 text-xs font-medium text-red-600">
-                        已超過此地區當月份數上限，請調整。
+                        今日輸入已超過此地區可填上限，請調整。
                       </p>
                     ) : null}
                   </div>
@@ -1023,7 +1043,7 @@ export default function DailyEntryPage() {
           <div className="mt-6">
             <button
               onClick={handleSave}
-              disabled={saving || hasPartTimeOverLimit}
+              disabled={saving}
               className="rounded-xl bg-slate-900 px-6 py-3 font-medium text-white hover:bg-slate-800 disabled:opacity-50"
             >
               {saving ? "儲存中..." : "儲存今日填報"}
