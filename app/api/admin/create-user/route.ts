@@ -89,6 +89,13 @@ export async function POST(req: Request) {
     let employeeCode = String(body.employee_code ?? "").trim();
     const role = normalizeRole(body.role);
 
+    console.log("create-user request:", {
+      email,
+      displayName,
+      employeeCode,
+      role,
+    });
+
     if (!email || !password || !displayName) {
       return NextResponse.json(
         { error: "請完整填寫 Email、密碼及顯示名稱。" },
@@ -150,11 +157,19 @@ export async function POST(req: Request) {
       employeeCode = await getNextEmployeeCode(supabaseAdmin, role);
     }
 
-    const { data: existingEmployee } = await supabaseAdmin
-      .from("profiles")
-      .select("id")
-      .eq("employee_code", employeeCode)
-      .maybeSingle();
+    const { data: existingEmployee, error: existingEmployeeError } =
+      await supabaseAdmin
+        .from("profiles")
+        .select("id")
+        .eq("employee_code", employeeCode)
+        .maybeSingle();
+
+    if (existingEmployeeError) {
+      return NextResponse.json(
+        { error: `檢查員工編號失敗：${existingEmployeeError.message}` },
+        { status: 400 }
+      );
+    }
 
     if (existingEmployee) {
       return NextResponse.json(
@@ -175,6 +190,11 @@ export async function POST(req: Request) {
         },
       });
 
+    console.log("create-user auth result:", {
+      userId: createdUserData?.user?.id ?? null,
+      error: createUserError?.message ?? null,
+    });
+
     if (createUserError || !createdUserData.user) {
       const message =
         createUserError?.message?.includes("already been registered")
@@ -186,19 +206,23 @@ export async function POST(req: Request) {
 
     const newUser = createdUserData.user;
 
+    const profilePayload = {
+      id: newUser.id,
+      display_name: displayName,
+      employee_code: employeeCode,
+      role,
+      email,
+      status: "active",
+      updated_at: new Date().toISOString(),
+    };
+
     const { error: profileUpsertError } = await supabaseAdmin
       .from("profiles")
-      .upsert(
-        {
-          id: newUser.id,
-          display_name: displayName,
-          employee_code: employeeCode,
-          role,
-        },
-        { onConflict: "id" }
-      );
+      .upsert(profilePayload, { onConflict: "id" });
 
     if (profileUpsertError) {
+      console.error("profileUpsertError:", profileUpsertError);
+
       return NextResponse.json(
         {
           error: `auth 建立成功，但 profiles 同步失敗：${profileUpsertError.message}`,
@@ -216,9 +240,12 @@ export async function POST(req: Request) {
         display_name: displayName,
         employee_code: employeeCode,
         role,
+        status: "active",
       },
     });
   } catch (error) {
+    console.error("create-user route fatal error:", error);
+
     return NextResponse.json(
       {
         error:
