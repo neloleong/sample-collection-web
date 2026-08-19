@@ -51,20 +51,6 @@ type ProfileRow = {
   role: Role | null;
 };
 
-type RegionQuotaStat = {
-  region_id: number;
-  quota: number;
-  rawMonthTotal: number;
-  savedTodayQty: number;
-  currentInputQty: number;
-  baseWithoutTodaySaved: number;
-  nextMonthTotal: number;
-  allowedTodayQty: number;
-  remainingAfterInput: number;
-  isLocked: boolean;
-  isOverLimit: boolean;
-};
-
 function getLocalTodayString() {
   const now = new Date();
   const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
@@ -73,10 +59,14 @@ function getLocalTodayString() {
 
 function getShiftParts(value: string) {
   if (!value) {
-    return { start: "", end: "" };
+    return {
+      start: "",
+      end: "",
+    };
   }
 
   const [start, end] = value.split("-");
+
   return {
     start: (start ?? "").trim(),
     end: (end ?? "").trim(),
@@ -87,7 +77,10 @@ function buildShiftValue(start: string, end: string) {
   const cleanStart = start.trim();
   const cleanEnd = end.trim();
 
-  if (!cleanStart && !cleanEnd) return "";
+  if (!cleanStart && !cleanEnd) {
+    return "";
+  }
+
   return `${cleanStart}-${cleanEnd}`;
 }
 
@@ -108,36 +101,39 @@ function getEmptyWorkLogForm(): WorkLogForm {
   };
 }
 
-function getMonthBounds(dateString: string) {
-  const base = new Date(`${dateString}T00:00:00`);
-  const year = base.getFullYear();
-  const month = base.getMonth();
-
-  const start = new Date(year, month, 1);
-  const next = new Date(year, month + 1, 1);
-
-  const format = (d: Date) => {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    return `${y}-${m}-${day}`;
-  };
-
-  return {
-    monthStart: format(start),
-    nextMonthStart: format(next),
-  };
-}
-
 const SURVEY_LOCATION_OPTIONS = [
-  { value: "outer_harbour", label: "外港碼頭 Outer Harbour" },
-  { value: "taipa_ferry_terminal", label: "氹仔客運碼頭（北安） Taipa Ferry Terminal" },
-  { value: "border_gate", label: "關閘 Border Gate" },
-  { value: "hkzm_bridge", label: "港珠澳大橋 HK-Zhuhai-Macao Bridge" },
-  { value: "hengqin_port", label: "橫琴口岸 Hengqin Port" },
-  { value: "macau_airport", label: "澳門國際機場 Macau International Airport" },
-  { value: "qingmao_port", label: "青茂口岸 Qingmao Port" },
-  { value: "inner_harbor_ferry_terminal", label: "内港客運碼頭 Inner Harbor Ferry Terminal" },
+  {
+    value: "outer_harbour",
+    label: "外港碼頭 Outer Harbour",
+  },
+  {
+    value: "taipa_ferry_terminal",
+    label: "氹仔客運碼頭（北安） Taipa Ferry Terminal",
+  },
+  {
+    value: "border_gate",
+    label: "關閘 Border Gate",
+  },
+  {
+    value: "hkzm_bridge",
+    label: "港珠澳大橋 HK-Zhuhai-Macao Bridge",
+  },
+  {
+    value: "hengqin_port",
+    label: "橫琴口岸 Hengqin Port",
+  },
+  {
+    value: "macau_airport",
+    label: "澳門國際機場 Macau International Airport",
+  },
+  {
+    value: "qingmao_port",
+    label: "青茂口岸 Qingmao Port",
+  },
+  {
+    value: "inner_harbor_ferry_terminal",
+    label: "内港客運碼頭 Inner Harbor Ferry Terminal",
+  },
 ];
 
 const ISSUE_TYPE_OPTIONS = [
@@ -199,128 +195,67 @@ export default function DailyEntryPage() {
   const [role, setRole] = useState<Role>("staff");
 
   const [regions, setRegions] = useState<RegionCategory[]>([]);
-  const [selectedDate, setSelectedDate] = useState<string>(getLocalTodayString());
+
+  const [selectedDate, setSelectedDate] = useState<string>(
+    getLocalTodayString()
+  );
 
   const [quantities, setQuantities] = useState<Record<number, string>>({});
-  const [savedQuantities, setSavedQuantities] = useState<Record<number, string>>(
-    {}
-  );
-  const [monthlyRuleMap, setMonthlyRuleMap] = useState<Record<number, number>>({});
-  const [monthRegionTotalsRaw, setMonthRegionTotalsRaw] = useState<
-    Record<number, number>
-  >({});
 
-  const [workLog, setWorkLog] = useState<WorkLogForm>(getEmptyWorkLogForm());
+  const [workLog, setWorkLog] = useState<WorkLogForm>(
+    getEmptyWorkLogForm()
+  );
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
 
-  const isPartTime = role === "part_time";
-
   const buildEmptyQuantities = (regionList: RegionCategory[]) => {
     const initial: Record<number, string> = {};
+
     regionList.forEach((region) => {
       initial[region.id] = "";
     });
+
     return initial;
   };
 
-  const buildEmptyNumberMap = (regionList: RegionCategory[]) => {
-    const initial: Record<number, number> = {};
-    regionList.forEach((region) => {
-      initial[region.id] = 0;
-    });
-    return initial;
-  };
-
+  /*
+   * 當日總完成份數
+   */
   const totalQty = useMemo(() => {
     return regions.reduce((sum, region) => {
       const raw = quantities[region.id] ?? "";
       const value = raw === "" ? 0 : Number(raw);
+
       return sum + (Number.isNaN(value) ? 0 : value);
     }, 0);
   }, [regions, quantities]);
 
+  /*
+   * 當日非內地完成份數
+   */
   const nonMainlandQty = useMemo(() => {
     return regions
       .filter((region) => region.is_non_mainland)
       .reduce((sum, region) => {
         const raw = quantities[region.id] ?? "";
         const value = raw === "" ? 0 : Number(raw);
+
         return sum + (Number.isNaN(value) ? 0 : value);
       }, 0);
   }, [regions, quantities]);
 
+  /*
+   * 工作時間
+   */
   const shiftParts = useMemo(() => {
     return getShiftParts(workLog.working_shift);
   }, [workLog.working_shift]);
 
-  const regionQuotaStats = useMemo<Record<number, RegionQuotaStat>>(() => {
-    const next: Record<number, RegionQuotaStat> = {};
-
-    regions.forEach((region) => {
-      const quota = Number(monthlyRuleMap[region.id] ?? 0);
-      const rawMonthTotal = Number(monthRegionTotalsRaw[region.id] ?? 0);
-      const savedTodayQty = Number(savedQuantities[region.id] ?? 0);
-      const currentInputQty = Number(quantities[region.id] ?? 0);
-
-      const baseWithoutTodaySaved = Math.max(rawMonthTotal - savedTodayQty, 0);
-
-      const allowedTodayQty =
-        isPartTime && quota > 0
-          ? Math.max(quota - baseWithoutTodaySaved, 0)
-          : Number.POSITIVE_INFINITY;
-
-      const nextMonthTotal = baseWithoutTodaySaved + currentInputQty;
-
-      const remainingAfterInput =
-        isPartTime && quota > 0
-          ? Math.max(allowedTodayQty - currentInputQty, 0)
-          : 0;
-
-      const isLocked =
-        isPartTime &&
-        quota > 0 &&
-        allowedTodayQty === 0 &&
-        savedTodayQty === 0;
-
-      const isOverLimit =
-        isPartTime &&
-        quota > 0 &&
-        currentInputQty > allowedTodayQty;
-
-      next[region.id] = {
-        region_id: region.id,
-        quota,
-        rawMonthTotal,
-        savedTodayQty,
-        currentInputQty,
-        baseWithoutTodaySaved,
-        nextMonthTotal,
-        allowedTodayQty:
-          allowedTodayQty === Number.POSITIVE_INFINITY ? 0 : allowedTodayQty,
-        remainingAfterInput,
-        isLocked,
-        isOverLimit,
-      };
-    });
-
-    return next;
-  }, [
-    regions,
-    monthlyRuleMap,
-    monthRegionTotalsRaw,
-    savedQuantities,
-    quantities,
-    isPartTime,
-  ]);
-
-  const hasPartTimeOverLimit = useMemo(() => {
-    if (!isPartTime) return false;
-    return Object.values(regionQuotaStats).some((item) => item.isOverLimit);
-  }, [isPartTime, regionQuotaStats]);
-
+  /*
+   * 載入指定日期的每日完成份數
+   */
   const loadDailyEntries = async (
     currentUserId: string,
     currentDate: string,
@@ -344,52 +279,11 @@ export default function DailyEntryPage() {
     });
 
     setQuantities(nextQuantities);
-    setSavedQuantities(nextQuantities);
   };
 
-  const loadMonthlyQuotaAndTotals = async (
-    currentDate: string,
-    regionList: RegionCategory[]
-  ) => {
-    const { monthStart } = getMonthBounds(currentDate);
-
-    const [rulesResult, totalsResult] = await Promise.all([
-      supabase
-        .from("monthly_region_rules")
-        .select("region_id, quota")
-        .eq("rule_month", monthStart),
-
-      supabase
-        .from("monthly_region_totals_public")
-        .select("region_id, total_quantity")
-        .eq("month_start", monthStart),
-    ]);
-
-    if (rulesResult.error) {
-      setMessage(rulesResult.error.message);
-      return;
-    }
-
-    if (totalsResult.error) {
-      setMessage(totalsResult.error.message);
-      return;
-    }
-
-    const nextRuleMap = buildEmptyNumberMap(regionList);
-    const nextMonthTotals = buildEmptyNumberMap(regionList);
-
-    (rulesResult.data ?? []).forEach((row: any) => {
-      nextRuleMap[row.region_id] = Number(row.quota ?? 0);
-    });
-
-    (totalsResult.data ?? []).forEach((row: any) => {
-      nextMonthTotals[row.region_id] = Number(row.total_quantity ?? 0);
-    });
-
-    setMonthlyRuleMap(nextRuleMap);
-    setMonthRegionTotalsRaw(nextMonthTotals);
-  };
-
+  /*
+   * 載入指定日期的現場工作記錄
+   */
   const loadDailyWorkLog = async (
     currentUserId: string,
     currentDate: string,
@@ -398,7 +292,17 @@ export default function DailyEntryPage() {
     const { data, error } = await supabase
       .from("daily_work_logs")
       .select(
-        "work_date, interviewer_id, survey_location, working_shift, abnormal_case_count, abnormal_included_in_completed, issue_types, estimated_footfall, issues_and_suggestions"
+        `
+        work_date,
+        interviewer_id,
+        survey_location,
+        working_shift,
+        abnormal_case_count,
+        abnormal_included_in_completed,
+        issue_types,
+        estimated_footfall,
+        issues_and_suggestions
+        `
       )
       .eq("user_id", currentUserId)
       .eq("work_date", currentDate)
@@ -416,6 +320,7 @@ export default function DailyEntryPage() {
         ...getEmptyWorkLogForm(),
         interviewer_id: currentEmployeeCode,
       });
+
       return;
     }
 
@@ -424,21 +329,27 @@ export default function DailyEntryPage() {
       survey_location: row.survey_location ?? "",
       working_shift: row.working_shift ?? "",
       abnormal_case_count:
-        row.abnormal_case_count === null || row.abnormal_case_count === undefined
+        row.abnormal_case_count === null ||
+        row.abnormal_case_count === undefined
           ? ""
           : String(row.abnormal_case_count),
+
       abnormal_included_in_completed:
         row.abnormal_included_in_completed === true
           ? "yes"
           : row.abnormal_included_in_completed === false
           ? "no"
           : "",
+
       issue_types: row.issue_types ?? [],
       estimated_footfall: row.estimated_footfall ?? "",
       issues_and_suggestions: row.issues_and_suggestions ?? "",
     });
   };
 
+  /*
+   * 初始化
+   */
   useEffect(() => {
     const init = async () => {
       setLoading(true);
@@ -446,15 +357,19 @@ export default function DailyEntryPage() {
 
       const {
         data: { user },
+        error: authError,
       } = await supabase.auth.getUser();
 
-      if (!user) {
+      if (authError || !user) {
         router.replace("/login");
         return;
       }
 
       setUserId(user.id);
 
+      /*
+       * 讀取使用者資料
+       */
       const { data: profileData, error: profileError } = await supabase
         .from("profiles")
         .select("display_name, employee_code, role")
@@ -468,18 +383,31 @@ export default function DailyEntryPage() {
       }
 
       const profile = (profileData ?? null) as ProfileRow | null;
-      const resolvedDisplayName = profile?.display_name ?? user.email ?? "User";
-      const resolvedEmployeeCode = profile?.employee_code ?? "";
-      const resolvedRole = (profile?.role ?? "staff") as Role;
+
+      const resolvedDisplayName =
+        profile?.display_name ?? user.email ?? "User";
+
+      const resolvedEmployeeCode =
+        profile?.employee_code ?? "";
+
+      const resolvedRole =
+        (profile?.role ?? "staff") as Role;
 
       setDisplayName(resolvedDisplayName);
       setEmployeeCode(resolvedEmployeeCode);
       setRole(resolvedRole);
 
+      /*
+       * 讀取地區類別
+       */
       const { data: regionData, error: regionError } = await supabase
         .from("region_categories")
-        .select("id, region_name_zh, sort_order, is_non_mainland")
-        .order("sort_order", { ascending: true });
+        .select(
+          "id, region_name_zh, sort_order, is_non_mainland"
+        )
+        .order("sort_order", {
+          ascending: true,
+        });
 
       if (regionError) {
         setMessage(regionError.message);
@@ -487,25 +415,47 @@ export default function DailyEntryPage() {
         return;
       }
 
-      const regionList = (regionData ?? []) as RegionCategory[];
-      setRegions(regionList);
-      setQuantities(buildEmptyQuantities(regionList));
-      setSavedQuantities(buildEmptyQuantities(regionList));
+      const regionList =
+        (regionData ?? []) as RegionCategory[];
 
+      setRegions(regionList);
+
+      setQuantities(
+        buildEmptyQuantities(regionList)
+      );
+
+      /*
+       * 載入今天資料
+       */
       await Promise.all([
-        loadDailyEntries(user.id, selectedDate, regionList),
-        loadMonthlyQuotaAndTotals(selectedDate, regionList),
-        loadDailyWorkLog(user.id, selectedDate, resolvedEmployeeCode),
+        loadDailyEntries(
+          user.id,
+          selectedDate,
+          regionList
+        ),
+
+        loadDailyWorkLog(
+          user.id,
+          selectedDate,
+          resolvedEmployeeCode
+        ),
       ]);
 
       setLoading(false);
     };
 
     void init();
+
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router]);
 
+  /*
+   * Employee Code 改變時同步 interviewer_id
+   */
   useEffect(() => {
-    if (!employeeCode) return;
+    if (!employeeCode) {
+      return;
+    }
 
     setWorkLog((prev) => ({
       ...prev,
@@ -513,42 +463,93 @@ export default function DailyEntryPage() {
     }));
   }, [employeeCode]);
 
+  /*
+   * 日期改變時重新載入資料
+   */
   useEffect(() => {
     const reloadByDate = async () => {
-      if (!userId || regions.length === 0) return;
+      if (!userId || regions.length === 0) {
+        return;
+      }
+
+      setMessage("");
 
       await Promise.all([
-        loadDailyEntries(userId, selectedDate, regions),
-        loadMonthlyQuotaAndTotals(selectedDate, regions),
-        loadDailyWorkLog(userId, selectedDate, employeeCode),
+        loadDailyEntries(
+          userId,
+          selectedDate,
+          regions
+        ),
+
+        loadDailyWorkLog(
+          userId,
+          selectedDate,
+          employeeCode
+        ),
       ]);
     };
 
     void reloadByDate();
-  }, [userId, selectedDate, regions, employeeCode]);
 
-  const handleQuantityChange = (regionId: number, value: string) => {
-    const stat = regionQuotaStats[regionId];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    userId,
+    selectedDate,
+    regions,
+    employeeCode,
+  ]);
 
+  /*
+   * 更改地區完成份數
+   *
+   * 已完全取消：
+   * - 兼職限制
+   * - 月份 quota
+   * - 地區 quota
+   * - 已達上限鎖定
+   *
+   * 所有人都可以正常填寫。
+   */
+  const handleQuantityChange = (
+    regionId: number,
+    value: string
+  ) => {
+    /*
+     * 允許清空欄位
+     */
     if (value === "") {
-      setQuantities((prev) => ({ ...prev, [regionId]: "" }));
-      return;
-    }
+      setQuantities((prev) => ({
+        ...prev,
+        [regionId]: "",
+      }));
 
-    if (isPartTime && stat?.isLocked) {
       return;
     }
 
     const numericValue = Number(value);
 
-    if (Number.isNaN(numericValue) || numericValue < 0) {
+    /*
+     * 不接受非數字或負數
+     */
+    if (
+      Number.isNaN(numericValue) ||
+      numericValue < 0
+    ) {
       return;
     }
 
-    setQuantities((prev) => ({ ...prev, [regionId]: value }));
+    setQuantities((prev) => ({
+      ...prev,
+      [regionId]: value,
+    }));
   };
 
-  const updateWorkLogField = <K extends keyof WorkLogForm>(
+  /*
+   * 更新工作記錄欄位
+   */
+  const updateWorkLogField = <
+    K extends keyof WorkLogForm
+  >(
     field: K,
     value: WorkLogForm[K]
   ) => {
@@ -558,150 +559,329 @@ export default function DailyEntryPage() {
     }));
   };
 
-  const updateWorkingShiftPart = (part: "start" | "end", value: string) => {
-    const current = getShiftParts(workLog.working_shift);
+  /*
+   * 更新工作時段
+   */
+  const updateWorkingShiftPart = (
+    part: "start" | "end",
+    value: string
+  ) => {
+    const current =
+      getShiftParts(workLog.working_shift);
 
-    const nextStart = part === "start" ? value : current.start;
-    const nextEnd = part === "end" ? value : current.end;
+    const nextStart =
+      part === "start"
+        ? value
+        : current.start;
 
-    updateWorkLogField("working_shift", buildShiftValue(nextStart, nextEnd));
+    const nextEnd =
+      part === "end"
+        ? value
+        : current.end;
+
+    updateWorkLogField(
+      "working_shift",
+      buildShiftValue(
+        nextStart,
+        nextEnd
+      )
+    );
   };
 
-  const toggleIssueType = (value: string) => {
+  /*
+   * 異常類型 checkbox
+   */
+  const toggleIssueType = (
+    value: string
+  ) => {
     setWorkLog((prev) => {
-      const exists = prev.issue_types.includes(value);
+      const exists =
+        prev.issue_types.includes(value);
+
       return {
         ...prev,
+
         issue_types: exists
-          ? prev.issue_types.filter((item) => item !== value)
-          : [...prev.issue_types, value],
+          ? prev.issue_types.filter(
+              (item) => item !== value
+            )
+          : [
+              ...prev.issue_types,
+              value,
+            ],
       };
     });
   };
 
+  /*
+   * 儲存
+   */
   const handleSave = async () => {
-    if (!userId) return;
+    if (!userId) {
+      return;
+    }
 
     setSaving(true);
     setMessage("");
 
-    const shift = getShiftParts(workLog.working_shift);
+    /*
+     * 驗證工作時間
+     */
+    const shift =
+      getShiftParts(workLog.working_shift);
 
-    if (shift.start && !isValidTimeText(shift.start)) {
-      setMessage("開始時間格式錯誤，請使用 HH:mm，例如 09:00。");
+    if (
+      shift.start &&
+      !isValidTimeText(shift.start)
+    ) {
+      setMessage(
+        "開始時間格式錯誤，請使用 HH:mm，例如 09:00。"
+      );
+
       setSaving(false);
       return;
     }
 
-    if (shift.end && !isValidTimeText(shift.end)) {
-      setMessage("結束時間格式錯誤，請使用 HH:mm，例如 18:00。");
+    if (
+      shift.end &&
+      !isValidTimeText(shift.end)
+    ) {
+      setMessage(
+        "結束時間格式錯誤，請使用 HH:mm，例如 18:00。"
+      );
+
       setSaving(false);
       return;
     }
 
-    if (!shift.start || !shift.end) {
-      setMessage("請完整填寫開始時間及結束時間。");
+    if (
+      !shift.start ||
+      !shift.end
+    ) {
+      setMessage(
+        "請完整填寫開始時間及結束時間。"
+      );
+
       setSaving(false);
       return;
     }
 
-    if (isPartTime && hasPartTimeOverLimit) {
-      setMessage("有地區輸入份數超過今日可填上限，請先調整後再儲存。");
-      setSaving(false);
-      return;
-    }
+    /*
+     * 整理有數量的資料
+     */
+    const positivePayload =
+      regions
+        .map((region) => {
+          const raw =
+            quantities[region.id] ?? "";
 
-    const positivePayload = regions
-      .map((region) => {
-        const raw = quantities[region.id] ?? "";
-        const qty = raw === "" ? 0 : Math.max(0, Number(raw) || 0);
+          const qty =
+            raw === ""
+              ? 0
+              : Math.max(
+                  0,
+                  Number(raw) || 0
+                );
 
-        return {
-          user_id: userId,
-          entry_date: selectedDate,
-          region_id: region.id,
-          quantity: qty,
-          note: null,
-        };
-      })
-      .filter((row) => row.quantity > 0);
+          return {
+            user_id: userId,
+            entry_date: selectedDate,
+            region_id: region.id,
+            quantity: qty,
+            note: null,
+          };
+        })
+        .filter(
+          (row) =>
+            row.quantity > 0
+        );
 
-    const zeroRegionIds = regions
-      .filter((region) => {
-        const raw = quantities[region.id] ?? "";
-        const qty = raw === "" ? 0 : Math.max(0, Number(raw) || 0);
-        return qty === 0;
-      })
-      .map((region) => region.id);
+    /*
+     * 找出填 0 或已清空的地區
+     */
+    const zeroRegionIds =
+      regions
+        .filter((region) => {
+          const raw =
+            quantities[region.id] ?? "";
 
-    if (positivePayload.length > 0) {
-      const { error: upsertError } = await supabase
+          const qty =
+            raw === ""
+              ? 0
+              : Math.max(
+                  0,
+                  Number(raw) || 0
+                );
+
+          return qty === 0;
+        })
+        .map(
+          (region) => region.id
+        );
+
+    /*
+     * 寫入 / 更新每日完成份數
+     */
+    if (
+      positivePayload.length > 0
+    ) {
+      const {
+        error: upsertError,
+      } = await supabase
         .from("daily_entries")
-        .upsert(positivePayload, { onConflict: "user_id,entry_date,region_id" });
+        .upsert(
+          positivePayload,
+          {
+            onConflict:
+              "user_id,entry_date,region_id",
+          }
+        );
 
       if (upsertError) {
-        setMessage(upsertError.message);
+        setMessage(
+          upsertError.message
+        );
+
         setSaving(false);
         return;
       }
     }
 
-    if (zeroRegionIds.length > 0) {
-      const { error: deleteError } = await supabase
+    /*
+     * 如果數量改成 0，
+     * 刪除原有記錄
+     */
+    if (
+      zeroRegionIds.length > 0
+    ) {
+      const {
+        error: deleteError,
+      } = await supabase
         .from("daily_entries")
         .delete()
-        .eq("user_id", userId)
-        .eq("entry_date", selectedDate)
-        .in("region_id", zeroRegionIds);
+        .eq(
+          "user_id",
+          userId
+        )
+        .eq(
+          "entry_date",
+          selectedDate
+        )
+        .in(
+          "region_id",
+          zeroRegionIds
+        );
 
       if (deleteError) {
-        setMessage(deleteError.message);
+        setMessage(
+          deleteError.message
+        );
+
         setSaving(false);
         return;
       }
     }
 
+    /*
+     * 現場工作記錄
+     */
     const workLogPayload = {
       user_id: userId,
-      work_date: selectedDate,
-      interviewer_id: workLog.interviewer_id || null,
-      survey_location: workLog.survey_location || null,
-      working_shift: workLog.working_shift || null,
+
+      work_date:
+        selectedDate,
+
+      interviewer_id:
+        workLog.interviewer_id ||
+        null,
+
+      survey_location:
+        workLog.survey_location ||
+        null,
+
+      working_shift:
+        workLog.working_shift ||
+        null,
+
       abnormal_case_count:
         workLog.abnormal_case_count === ""
           ? 0
-          : Math.max(0, Number(workLog.abnormal_case_count) || 0),
+          : Math.max(
+              0,
+              Number(
+                workLog.abnormal_case_count
+              ) || 0
+            ),
+
       abnormal_included_in_completed:
-        workLog.abnormal_included_in_completed === "yes"
+        workLog.abnormal_included_in_completed ===
+        "yes"
           ? true
-          : workLog.abnormal_included_in_completed === "no"
+          : workLog.abnormal_included_in_completed ===
+            "no"
           ? false
           : null,
-      issue_types: workLog.issue_types,
-      estimated_footfall: workLog.estimated_footfall || null,
-      issues_and_suggestions: workLog.issues_and_suggestions || null,
+
+      issue_types:
+        workLog.issue_types,
+
+      estimated_footfall:
+        workLog.estimated_footfall ||
+        null,
+
+      issues_and_suggestions:
+        workLog.issues_and_suggestions ||
+        null,
     };
 
-    const { error: workLogError } = await supabase
+    const {
+      error: workLogError,
+    } = await supabase
       .from("daily_work_logs")
-      .upsert(workLogPayload, { onConflict: "user_id,work_date" });
+      .upsert(
+        workLogPayload,
+        {
+          onConflict:
+            "user_id,work_date",
+        }
+      );
 
     if (workLogError) {
-      setMessage(workLogError.message);
+      setMessage(
+        workLogError.message
+      );
+
       setSaving(false);
       return;
     }
 
+    /*
+     * 儲存成功後重新讀取
+     */
     await Promise.all([
-      loadDailyEntries(userId, selectedDate, regions),
-      loadMonthlyQuotaAndTotals(selectedDate, regions),
-      loadDailyWorkLog(userId, selectedDate, employeeCode),
+      loadDailyEntries(
+        userId,
+        selectedDate,
+        regions
+      ),
+
+      loadDailyWorkLog(
+        userId,
+        selectedDate,
+        employeeCode
+      ),
     ]);
 
-    setMessage("已成功儲存每日填報及現場工作記錄。");
+    setMessage(
+      "已成功儲存每日填報及現場工作記錄。"
+    );
+
     setSaving(false);
   };
 
+  /*
+   * Loading
+   */
   if (loading) {
     return (
       <main className="min-h-screen bg-slate-50 px-6 py-10">
@@ -715,76 +895,122 @@ export default function DailyEntryPage() {
   return (
     <main className="min-h-screen bg-slate-50 px-6 py-10">
       <div className="mx-auto max-w-6xl space-y-6">
+
+        {/* 標題 */}
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">每日填報</h1>
-          <p className="mt-1 text-sm text-slate-600">使用者：{displayName}</p>
-          <p className="mt-1 text-sm text-slate-500">請填寫指定日期各地區完成份數</p>
+          <h1 className="text-2xl font-bold text-slate-900">
+            每日填報
+          </h1>
+
+          <p className="mt-1 text-sm text-slate-600">
+            使用者：{displayName}
+          </p>
+
           <p className="mt-1 text-sm text-slate-500">
-            角色：{role === "part_time" ? "兼職" : role === "admin" ? "管理員" : "全職"}
+            請填寫指定日期各地區完成份數
+          </p>
+
+          <p className="mt-1 text-sm text-slate-500">
+            角色：
+            {role === "part_time"
+              ? "兼職"
+              : role === "admin"
+              ? "管理員"
+              : "全職"}
           </p>
         </div>
 
+        {/* 頁面操作 */}
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <PageActionButtons />
         </div>
 
+        {/* 日期及統計 */}
         <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
           <div className="grid gap-4 md:grid-cols-3">
+
             <div>
               <label className="mb-2 block text-sm font-medium text-slate-700">
                 填報日期
               </label>
+
               <input
                 type="date"
                 value={selectedDate}
-                onChange={(e) => setSelectedDate(e.target.value)}
+                onChange={(e) =>
+                  setSelectedDate(
+                    e.target.value
+                  )
+                }
                 className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
               />
             </div>
 
             <div className="rounded-xl bg-slate-50 p-4">
-              <p className="text-sm text-slate-500">當日總份數</p>
-              <p className="mt-2 text-2xl font-bold text-slate-900">{totalQty}</p>
+              <p className="text-sm text-slate-500">
+                當日總份數
+              </p>
+
+              <p className="mt-2 text-2xl font-bold text-slate-900">
+                {totalQty}
+              </p>
             </div>
 
             <div className="rounded-xl bg-slate-50 p-4">
-              <p className="text-sm text-slate-500">當日非內地份數</p>
+              <p className="text-sm text-slate-500">
+                當日非內地份數
+              </p>
+
               <p className="mt-2 text-2xl font-bold text-slate-900">
                 {nonMainlandQty}
               </p>
             </div>
+
           </div>
         </div>
 
+        {/* 現場工作記錄 */}
         <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+
           <h2 className="text-lg font-semibold text-slate-900">
             現場工作記錄問卷（調查員填寫）
           </h2>
+
           <p className="mt-1 text-sm text-slate-600">
             請調查員通過此記錄，多謝合作！如有任何意見，請跟管理員反映。
           </p>
+
           <p className="mt-1 text-sm text-slate-500">
-            Please complete this record accordingly. Thank you for your cooperation.
-            If you have any comments or suggestions, please contact the administrator.
+            Please complete this record accordingly.
+            Thank you for your cooperation.
+            If you have any comments or suggestions,
+            please contact the administrator.
           </p>
 
           <div className="mt-6 grid gap-4 md:grid-cols-2">
+
+            {/* 1 */}
             <div>
               <label className="mb-2 block text-sm font-medium text-slate-700">
                 1. 訪問員編號 Interviewer ID
               </label>
+
               <input
                 type="text"
-                value={workLog.interviewer_id}
+                value={
+                  workLog.interviewer_id
+                }
                 readOnly
                 className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-slate-600 outline-none"
               />
             </div>
 
+            {/* 2 */}
             <div>
               <label className="mb-2 block text-sm font-medium text-slate-700">
                 2. 日期 Date
               </label>
+
               <input
                 type="date"
                 value={selectedDate}
@@ -793,47 +1019,87 @@ export default function DailyEntryPage() {
               />
             </div>
 
+            {/* 3 */}
             <div>
               <label className="mb-2 block text-sm font-medium text-slate-700">
                 3. 工作口岸 Survey Location
               </label>
+
               <select
-                value={workLog.survey_location}
-                onChange={(e) => updateWorkLogField("survey_location", e.target.value)}
+                value={
+                  workLog.survey_location
+                }
+                onChange={(e) =>
+                  updateWorkLogField(
+                    "survey_location",
+                    e.target.value
+                  )
+                }
                 className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
               >
-                <option value="">請選擇工作口岸</option>
-                {SURVEY_LOCATION_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
+                <option value="">
+                  請選擇工作口岸
+                </option>
+
+                {SURVEY_LOCATION_OPTIONS.map(
+                  (option) => (
+                    <option
+                      key={
+                        option.value
+                      }
+                      value={
+                        option.value
+                      }
+                    >
+                      {option.label}
+                    </option>
+                  )
+                )}
               </select>
             </div>
 
+            {/* 4 */}
             <div>
               <label className="mb-2 block text-sm font-medium text-slate-700">
                 4. 工作時段 Working Shift
               </label>
 
               <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
+
                 <input
                   type="text"
-                  value={shiftParts.start}
-                  onChange={(e) => updateWorkingShiftPart("start", e.target.value)}
+                  value={
+                    shiftParts.start
+                  }
+                  onChange={(e) =>
+                    updateWorkingShiftPart(
+                      "start",
+                      e.target.value
+                    )
+                  }
                   placeholder="開始時間，例如 09:00"
                   className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
                 />
 
-                <span className="text-sm text-slate-500">至</span>
+                <span className="text-sm text-slate-500">
+                  至
+                </span>
 
                 <input
                   type="text"
-                  value={shiftParts.end}
-                  onChange={(e) => updateWorkingShiftPart("end", e.target.value)}
+                  value={
+                    shiftParts.end
+                  }
+                  onChange={(e) =>
+                    updateWorkingShiftPart(
+                      "end",
+                      e.target.value
+                    )
+                  }
                   placeholder="結束時間，例如 18:00"
                   className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
                 />
+
               </div>
 
               <p className="mt-2 text-xs text-slate-500">
@@ -842,89 +1108,153 @@ export default function DailyEntryPage() {
 
               <p className="mt-1 text-xs text-slate-500">
                 已選時段：
-                {shiftParts.start || shiftParts.end
-                  ? `${shiftParts.start || "未填"} 至 ${shiftParts.end || "未填"}`
+                {shiftParts.start ||
+                shiftParts.end
+                  ? `${
+                      shiftParts.start ||
+                      "未填"
+                    } 至 ${
+                      shiftParts.end ||
+                      "未填"
+                    }`
                   : "未選擇"}
               </p>
             </div>
 
+            {/* 5 */}
             <div>
               <label className="mb-2 block text-sm font-medium text-slate-700">
                 5. 異常樣本數量 Number of abnormal cases
               </label>
+
               <input
                 type="number"
                 min="0"
                 step="1"
-                value={workLog.abnormal_case_count}
+                value={
+                  workLog.abnormal_case_count
+                }
                 onChange={(e) =>
-                  updateWorkLogField("abnormal_case_count", e.target.value)
+                  updateWorkLogField(
+                    "abnormal_case_count",
+                    e.target.value
+                  )
                 }
                 className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
               />
             </div>
 
+            {/* 6 */}
             <div>
               <label className="mb-2 block text-sm font-medium text-slate-700">
                 6. 異常樣本是否包括在完成份數內？
               </label>
+
               <select
-                value={workLog.abnormal_included_in_completed}
+                value={
+                  workLog.abnormal_included_in_completed
+                }
                 onChange={(e) =>
                   updateWorkLogField(
                     "abnormal_included_in_completed",
-                    e.target.value as "" | "yes" | "no"
+                    e.target.value as
+                      | ""
+                      | "yes"
+                      | "no"
                   )
                 }
                 className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
               >
-                <option value="">請選擇</option>
-                <option value="yes">是 Yes</option>
-                <option value="no">否 No</option>
+                <option value="">
+                  請選擇
+                </option>
+
+                <option value="yes">
+                  是 Yes
+                </option>
+
+                <option value="no">
+                  否 No
+                </option>
+
               </select>
             </div>
+
           </div>
 
+          {/* 7 */}
           <div className="mt-6">
             <label className="mb-3 block text-sm font-medium text-slate-700">
               7. 異常類型 Type of issue
             </label>
+
             <div className="grid gap-3 md:grid-cols-2">
-              {ISSUE_TYPE_OPTIONS.map((option) => (
-                <label
-                  key={option.value}
-                  className="flex items-start gap-3 rounded-xl border border-slate-200 px-4 py-3"
-                >
-                  <input
-                    type="checkbox"
-                    checked={workLog.issue_types.includes(option.value)}
-                    onChange={() => toggleIssueType(option.value)}
-                    className="mt-1"
-                  />
-                  <span className="text-sm text-slate-700">{option.label}</span>
-                </label>
-              ))}
+              {ISSUE_TYPE_OPTIONS.map(
+                (option) => (
+                  <label
+                    key={option.value}
+                    className="flex items-start gap-3 rounded-xl border border-slate-200 px-4 py-3"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={workLog.issue_types.includes(
+                        option.value
+                      )}
+                      onChange={() =>
+                        toggleIssueType(
+                          option.value
+                        )
+                      }
+                      className="mt-1"
+                    />
+
+                    <span className="text-sm text-slate-700">
+                      {option.label}
+                    </span>
+                  </label>
+                )
+              )}
             </div>
           </div>
 
-          <div className="mt-6 grid gap-4 md:grid-cols-1">
+          {/* 8 + 9 */}
+          <div className="mt-6 grid gap-4">
+
             <div>
               <label className="mb-2 block text-sm font-medium text-slate-700">
                 8. 今日口岸預估人流量 Estimated footfall at the location today
               </label>
+
               <select
-                value={workLog.estimated_footfall}
+                value={
+                  workLog.estimated_footfall
+                }
                 onChange={(e) =>
-                  updateWorkLogField("estimated_footfall", e.target.value)
+                  updateWorkLogField(
+                    "estimated_footfall",
+                    e.target.value
+                  )
                 }
                 className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
               >
-                <option value="">請選擇預估人流量</option>
-                {FOOTFALL_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
+                <option value="">
+                  請選擇預估人流量
+                </option>
+
+                {FOOTFALL_OPTIONS.map(
+                  (option) => (
+                    <option
+                      key={
+                        option.value
+                      }
+                      value={
+                        option.value
+                      }
+                    >
+                      {option.label}
+                    </option>
+                  )
+                )}
               </select>
             </div>
 
@@ -932,124 +1262,124 @@ export default function DailyEntryPage() {
               <label className="mb-2 block text-sm font-medium text-slate-700">
                 9. 問卷期間發現的問題及建議
               </label>
+
               <textarea
                 rows={5}
                 placeholder="請填寫今日現場發現的問題及建議"
-                value={workLog.issues_and_suggestions}
+                value={
+                  workLog.issues_and_suggestions
+                }
                 onChange={(e) =>
-                  updateWorkLogField("issues_and_suggestions", e.target.value)
+                  updateWorkLogField(
+                    "issues_and_suggestions",
+                    e.target.value
+                  )
                 }
                 className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
               />
             </div>
+
           </div>
         </div>
 
+        {/* 地區填報 */}
         <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-          <h2 className="text-lg font-semibold text-slate-900">地區類別填報</h2>
 
-          {isPartTime ? (
-            <div className="mt-3 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-700 ring-1 ring-amber-200">
-              兼職會按每個地區分開計算當月上限；若某地區已達上限，該地區不能再填寫。
-            </div>
-          ) : null}
+          <h2 className="text-lg font-semibold text-slate-900">
+            地區類別填報
+          </h2>
+
+          <p className="mt-2 text-sm text-slate-500">
+            請輸入今日各地區實際完成份數。
+          </p>
 
           <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {regions.map((region) => {
-              const stat = regionQuotaStats[region.id];
 
-              return (
+            {regions.map(
+              (region) => (
                 <div
                   key={region.id}
                   className="rounded-2xl border border-slate-200 p-4"
                 >
+
                   <div>
-                    <p className="text-sm text-slate-500">序號 {region.sort_order}</p>
+                    <p className="text-sm text-slate-500">
+                      序號{" "}
+                      {region.sort_order}
+                    </p>
+
                     <h3 className="mt-1 font-semibold text-slate-900">
-                      {region.region_name_zh}
+                      {
+                        region.region_name_zh
+                      }
                     </h3>
+
                     <p className="mt-1 text-xs text-slate-500">
-                      {region.is_non_mainland ? "非內地類別" : "內地類別"}
+                      {region.is_non_mainland
+                        ? "非內地類別"
+                        : "內地類別"}
                     </p>
                   </div>
 
-                  {isPartTime ? (
-                    <div className="mt-4 space-y-1 rounded-xl bg-slate-50 px-3 py-3 text-xs text-slate-600">
-                      <p>
-                        本月累計（含目前輸入）：{" "}
-                        <span className="font-semibold text-slate-900">
-                          {stat?.nextMonthTotal ?? 0}
-                        </span>
-                      </p>
-                      <p>
-                        建議配額：{" "}
-                        <span className="font-semibold text-slate-900">
-                          {stat?.quota ?? 0}
-                        </span>
-                      </p>
-                      <p>
-                        今日尚餘可填：{" "}
-                        <span className="font-semibold text-slate-900">
-                          {stat?.remainingAfterInput ?? 0}
-                        </span>
-                      </p>
-                    </div>
-                  ) : null}
-
                   <div className="mt-4">
+
                     <label className="mb-2 block text-sm font-medium text-slate-700">
                       今日完成份數
                     </label>
+
                     <input
                       type="number"
                       min="0"
                       step="1"
                       placeholder="請輸入份數"
-                      value={quantities[region.id] ?? ""}
-                      onChange={(e) => handleQuantityChange(region.id, e.target.value)}
-                      disabled={Boolean(isPartTime && stat?.isLocked)}
-                      className={`w-full rounded-xl border px-4 py-3 outline-none ${
-                        isPartTime && stat?.isLocked
-                          ? "border-red-200 bg-red-50 text-red-500"
-                          : isPartTime && stat?.isOverLimit
-                          ? "border-red-300 bg-red-50 text-red-700"
-                          : "border-slate-300 focus:border-slate-500"
-                      }`}
+                      value={
+                        quantities[
+                          region.id
+                        ] ?? ""
+                      }
+                      onChange={(e) =>
+                        handleQuantityChange(
+                          region.id,
+                          e.target.value
+                        )
+                      }
+                      className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-500"
                     />
 
-                    {isPartTime && stat?.isLocked ? (
-                      <p className="mt-2 text-xs font-medium text-red-600">
-                        已達份數上限，不能再填寫。
-                      </p>
-                    ) : null}
-
-                    {isPartTime && stat?.isOverLimit ? (
-                      <p className="mt-2 text-xs font-medium text-red-600">
-                        今日輸入已超過此地區可填上限，請調整。
-                      </p>
-                    ) : null}
                   </div>
                 </div>
-              );
-            })}
+              )
+            )}
+
           </div>
 
+          {/* 系統訊息 */}
           {message ? (
             <div className="mt-4 rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
               {message}
             </div>
           ) : null}
 
+          {/* 儲存 */}
           <div className="mt-6">
+
             <button
-              onClick={handleSave}
-              disabled={saving}
+              onClick={
+                handleSave
+              }
+              disabled={
+                saving
+              }
               className="rounded-xl bg-slate-900 px-6 py-3 font-medium text-white hover:bg-slate-800 disabled:opacity-50"
             >
-              {saving ? "儲存中..." : "儲存今日填報"}
+              {saving
+                ? "儲存中..."
+                : "儲存今日填報"}
             </button>
+
           </div>
         </div>
+
       </div>
     </main>
   );
